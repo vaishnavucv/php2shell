@@ -114,13 +114,28 @@ def run_active(script, url, timeout):
                 proc = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=sink,
                                       stderr=sink, env=env, timeout=timeout * 6 + 10,
                                       check=False, shell=False)
-            if proc.returncode != 0 or not out.exists():
-                return [{'kind': 'inconclusive', 'reason': 'Upstream execution failed; check dependencies.'}]
+            # Upstream main() returns 1 for positive findings, 0 otherwise,
+            # and 2 for output-write failure. Never discard a positive report.
+            if proc.returncode not in (0, 1) or not out.exists():
+                return [{'kind': 'inconclusive', 'execution_status': 'failed',
+                         'upstream_exit_code': proc.returncode, 'report_found': out.exists(),
+                         'reason': 'Upstream report unavailable or execution failed. Exit code 1 is a finding only when a valid report exists.'}]
             if out.stat().st_size > 2 * 1024 * 1024:
                 raise ValueError('Upstream report exceeds size limit.')
-            return active_signals(json.loads(out.read_text()))
+            try:
+                signals = active_signals(json.loads(out.read_text()))
+            except (json.JSONDecodeError, ValueError):
+                return [{'kind': 'inconclusive', 'execution_status': 'failed',
+                         'upstream_exit_code': proc.returncode,
+                         'reason': 'Upstream output is not a valid scanner report.'}]
+            if not signals:
+                return [{'kind': 'inconclusive', 'execution_status': 'failed',
+                         'upstream_exit_code': proc.returncode,
+                         'reason': 'Upstream report contains no target results.'}]
+            return [dict(x, upstream_exit_code=proc.returncode, execution_status='completed') for x in signals]
         except subprocess.TimeoutExpired:
-            return [{'kind': 'inconclusive', 'reason': 'Upstream execution exceeded deadline.'}]
+            return [{'kind': 'inconclusive', 'execution_status': 'failed',
+                     'reason': 'Upstream execution exceeded deadline.'}]
 
 
 def run_template(url, timeout):
@@ -273,7 +288,7 @@ def run_chain(url, origins, authorization_ref, paths=(), timeout=5, active_scrip
                          'php_signal_observed': item.get('php_signal_observed', False),
                          'signed_runtime_evidence_supplied': attestation is not None,
                          'interpretation': 'HTTP reachability and banners do not prove access to every PHP backend.'})
-    return {'schema_version': '3.1', 'scanner_version': '1.0.0-rc2', 'scanner': 'SIGiL PHP2Shell Chain',
+    return {'schema_version': '3.1', 'scanner_version': '1.0.0-rc3', 'scanner': 'SIGiL PHP2Shell Chain',
             'ruleset_date': '2026-10-25', 'target': url,
             'profile': profile, 'disruptive_testing_opt_in': bool(allow_disruptive),
             'coverage': coverage,

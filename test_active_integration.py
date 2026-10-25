@@ -11,7 +11,7 @@ from scanner import run_chain
 @unittest.skipUnless(importlib.util.find_spec('h11') and importlib.util.find_spec('tqdm'),
                      'Install requirements-active.txt for real upstream integration test')
 class ActiveIntegration(unittest.TestCase):
-    def run_synthetic(self, methods=()):
+    def run_synthetic(self, methods=(), positive=False):
         requests = []
         class Handler(BaseHTTPRequestHandler):
             def respond(self):
@@ -30,6 +30,11 @@ class ActiveIntegration(unittest.TestCase):
                     return
                 self.rfile.read(size)
                 requests.append(('POST', size))
+                if positive and size > 1000000:
+                    self.send_response(500)
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
                 self.respond()
             def log_message(self, *args):
                 pass
@@ -41,8 +46,14 @@ class ActiveIntegration(unittest.TestCase):
                 report = run_chain(base + '/index.php', [base], 'synthetic-fixture', timeout=5,
                     active_script=Path(__file__).parent / 'vendor' / 'assetnote_scanner.py',
                     active_methods=methods, profile='lab')
-                self.assertEqual(report['active_evidence'][0]['kind'], 'version_only')
-                self.assertEqual(report['findings'][0]['status'], 'fix_level_advertised')
+                if positive:
+                    self.assertEqual(report['active_evidence'][0]['kind'], 'ambiguous_runtime_anomaly')
+                    self.assertEqual(report['active_evidence'][0]['upstream_exit_code'], 1)
+                    self.assertEqual(report['active_evidence'][0]['execution_status'], 'completed')
+                    self.assertEqual(report['findings'][0]['status'], 'suspicious_behavior')
+                else:
+                    self.assertEqual(report['active_evidence'][0]['kind'], 'version_only')
+                    self.assertEqual(report['findings'][0]['status'], 'fix_level_advertised')
                 expected = ['GET', 'POST', 'POST', 'GET']
                 if methods == ('template', 'assetnote'):
                     expected += ['POST', 'POST', 'GET']
@@ -59,6 +70,9 @@ class ActiveIntegration(unittest.TestCase):
 
     def test_both_real_engines_in_one_chain(self):
         self.run_synthetic(('template', 'assetnote'))
+
+    def test_positive_exit_one_report_is_preserved(self):
+        self.run_synthetic(positive=True)
 
 
 if __name__ == '__main__':
