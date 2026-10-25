@@ -13,7 +13,16 @@ docker run --rm sigil-php2shell:1.0-rc2 --help
 
 The image includes the tested h11/tqdm versions, native ProjectDiscovery method and unchanged pinned Assetnote scanner. Nuclei is not required. The default Python base supports native Docker platform selection, including Apple Silicon; no amd64 override is required.
 
-This is build-ready source, not a prebuilt/published container image. Docker is unavailable in the authoring environment, so the Docker build and container networking examples have not been executed there. The underlying Python tests were executed locally; see README.md for the current test count. See PRODUCTION_USE.md for production URL commands. The localhost commands below are lab examples.
+The runtime image has been built locally for `linux/amd64` and `linux/arm64`, with CLI startup verified on both. GitHub Actions runs the Docker test stage for both architectures before publishing to `ghcr.io/vaishnavucv/php2shell`. See README.md for published image tags and access requirements, and PRODUCTION_USE.md for production URL commands. The localhost commands below are lab examples.
+
+Build and load both architectures locally with a containerd-enabled Docker image store (such as Docker Desktop):
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t sigil-php2shell:1.0-rc2 --load .
+```
+
+On a classic Docker image store, build one platform at a time with `--load`, or use `--push` with a registry tag to publish both architectures.
 
 Run the complete test suite during an explicit Docker test build:
 

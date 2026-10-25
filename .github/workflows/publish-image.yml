@@ -1,0 +1,116 @@
+name: Publish scanner image
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Optional additional image tag (for example 1.0-rc2)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ghcr-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Prepare image name and validate optional tag
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          if [[ -n "$IMAGE_TAG" && ! "$IMAGE_TAG" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]]; then
+            echo 'Invalid Docker image tag' >&2
+            exit 1
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+        with:
+          platforms: amd64,arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Test both architectures
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          target: test
+          platforms: linux/amd64,linux/arm64
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=scanner-tests
+          cache-to: type=gha,mode=max,scope=scanner-tests
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+            type=match,pattern=v(.*),group=1
+            type=raw,value=${{ inputs.image_tag }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.image_tag != '' }}
+
+      - name: Build and push multi-platform scanner
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          target: runtime
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: |
+            type=gha,scope=scanner-tests
+            type=gha,scope=scanner-runtime
+          cache-to: type=gha,mode=max,scope=scanner-runtime
+
+      - name: Verify published platforms
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          docker buildx imagetools inspect "$IMAGE@$DIGEST" --raw > manifest.json
+          python3 - <<'PYTHON'
+          import json
+          with open('manifest.json') as stream:
+              manifests = json.load(stream)['manifests']
+          platforms = {
+              (entry['platform']['os'], entry['platform']['architecture'])
+              for entry in manifests
+          }
+          expected = {('linux', 'amd64'), ('linux', 'arm64')}
+          assert expected <= platforms, f'Missing platforms: {expected - platforms}'
+          print('Published linux/amd64 and linux/arm64')
+          PYTHON
+          echo "Published $IMAGE@$DIGEST for linux/amd64 and linux/arm64" >> "$GITHUB_STEP_SUMMARY"

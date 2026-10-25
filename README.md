@@ -12,6 +12,17 @@ Any explicitly approved HTTP/HTTPS production endpoint is supported. host.docker
 
 See DOCKER.md for build, runtime flags, report mounts, Mac/Linux networking and Compose examples. All scanner flags can be passed after the image name. The Docker image includes both active methods and requires no Nuclei binary.
 
+### Published container (GHCR)
+
+GitHub Actions tests and publishes `linux/amd64` and `linux/arm64` images to `ghcr.io/vaishnavucv/php2shell`:
+
+```bash
+docker pull ghcr.io/vaishnavucv/php2shell:latest
+docker run --rm ghcr.io/vaishnavucv/php2shell:latest --help
+```
+
+Docker selects the matching architecture automatically on supported Ubuntu/Linux hosts and Docker Desktop. Pushes to `main` publish `latest` and a `sha-<commit>` tag. Version tags such as `v1.0-rc2` publish `1.0-rc2`. The **Publish scanner image** workflow also supports manual runs with an optional image tag. Authentication uses the repository’s built-in `GITHUB_TOKEN`; no registry secret is required. GHCR packages may initially be private; authenticated users can pull them, and the package owner can enable public visibility in package settings for anonymous pulls.
+
 ## Run without Nuclei or additional Python packages
 
 Use Python 3.10+. Extract the ZIP, enter the directory, and replace port 8080 with the HTTP port of your approved local PHP lab.
@@ -117,3 +128,46 @@ python3 -m unittest -v
 46 tests passed with active dependencies installed, including real upstream and native subprocesses against synthetic local HTTP fixtures, CLI execution with site packages disabled, original-JavaScript probe checksum vectors, patched-response ambiguity, signatures and failed recovery stopping. Without optional dependencies, the Assetnote integration test is skipped.
 
 These tests validate software behavior and integration, not field detection precision/recall. Your actual vulnerable and patched PHP lab still needs a measured benchmark. No upstream PR has been submitted.
+
+## Acknowledgements, Upstream Credits and Research References
+
+This project builds on the work of the security researchers, developers and maintainers acknowledged below. Credit for the original vulnerability discoveries, upstream scanning techniques and referenced proof-of-concept research belongs to their respective authors.
+
+SIGiL’s contribution is the assessment workflow, integration, evidence classification, reporting, production/lab profiles, Docker packaging and regression tests. We do not claim to have discovered PHP2Shell or independently developed the upstream detection techniques.
+
+### Integrated Upstream Work
+
+| Project | Contribution to this repository |
+| --- | --- |
+| [Assetnote PHP2Shell Scanner](https://github.com/assetnote/php2shell-scanner) | Provides the upstream active scanner included unchanged in `vendor/assetnote_scanner.py`. Credit belongs to the Assetnote Security Research Team. |
+| [ProjectDiscovery Nuclei Template](https://github.com/projectdiscovery/nuclei-templates/blob/main/http/cves/2026/CVE-2026-109618.yaml) | Provides scanning logic adapted into `template_method.py`, allowing this method to run directly in Python without Nuclei. Template authors: **lcfr_hax, assetnote, princechaddha and s4e-io**. |
+| [ProjectDiscovery PHP2Shell Research](https://projectdiscovery.io/research/php2shell) | Provides research context and guidance on PHP discovery, version assessment, host verification, patching and worker restarts. |
+
+### Additional Research References
+
+The following repositories were reviewed to understand verification approaches, exploitation prerequisites and detection limitations. Their RCE payloads are not integrated into this scanner.
+
+- [Bulletdev/php2shell-poc](https://github.com/Bulletdev/php2shell-poc)
+- [ikow/php2shell-poc](https://github.com/ikow/php2shell-poc)
+- [eness/php2shell-CVE-2026-109618-CVE-2026-109619-PoC](https://github.com/eness/php2shell-CVE-2026-109618-CVE-2026-109619-PoC)
+- [9bie/php2shell-bypass-aslr-exp](https://github.com/9bie/php2shell-bypass-aslr-exp)
+
+### Official Security Advisories
+
+The PHP Group’s advisories are the primary references for vulnerability descriptions and upstream remediation:
+
+- [CVE-2026-109618: RCE via OOM corruption](https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w)
+- [CVE-2026-109619: RCE via stale global state](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp)
+
+### Attribution and Licensing
+
+Original copyright and license notices for the bundled Assetnote scanner and ProjectDiscovery-derived work are retained in:
+
+- [Assetnote MIT License](vendor/ASSETNOTE-LICENSE.txt)
+- [ProjectDiscovery MIT License](vendor/PROJECTDISCOVERY-LICENSE.txt)
+- [Third-Party Notices and Source Revisions](THIRD_PARTY_NOTICES.md)
+- [Method Adaptations and Limitations](METHOD_REFERENCE.md)
+
+These acknowledgements distinguish integrated upstream work from research references. They do not imply that the named authors directly contributed to this repository, endorse SIGiL, or have independently validated its results.
+
+**Our thanks to the researchers and maintainers whose work made this project possible.**
