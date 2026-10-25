@@ -5,6 +5,7 @@ import datetime as dt
 import http.client
 import json
 import re
+import socket
 import ssl
 import urllib.error
 import urllib.parse
@@ -99,6 +100,32 @@ def _build_opener(insecure_tls):
     return urllib.request.build_opener(*handlers)
 
 
+def classify_transport_error(exc):
+    """Turn a urllib/OSError into a structured diagnostic so an operator can tell
+    a TLS rejection from a timeout from a plain connect failure. Returns a dict
+    plus (is_tls, is_timeout) so callers can add a hint without re-checking."""
+    cause = getattr(exc, 'reason', None)
+    underlying = cause if isinstance(cause, BaseException) else exc
+    name = type(underlying).__name__
+    text = str(underlying)
+    is_tls = (isinstance(underlying, ssl.SSLError)
+              or 'SSL' in name or 'CERTIFICATE_VERIFY_FAILED' in str(exc))
+    is_timeout = (isinstance(underlying, (socket.timeout, TimeoutError))
+                  or 'timed out' in text.lower())
+    if is_tls:
+        stage = 'tls_handshake'
+    elif is_timeout:
+        stage = 'timeout'
+    else:
+        stage = 'baseline_connectivity'
+    info = {'error_type': name, 'error_detail': text[:500], 'error_stage': stage}
+    if is_timeout:
+        # urllib surfaces a single socket timeout; it cannot reliably separate a
+        # connect timeout from a read timeout, so we report the honest category.
+        info['timeout_category'] = 'socket_timeout'
+    return info, is_tls, is_timeout
+
+
 def classify_headers(headers):
     evidence = []
     versions = set()
@@ -172,18 +199,12 @@ def scan(url, allowed_origins, authorization_ref, timeout=5, insecure_tls=False)
             # Do not download or retain the response body.
     except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
         # URLError wraps the real cause in .reason; surface it so an operator can
-        # tell a TLS rejection from DNS/TCP failures instead of a bare "URLError".
-        cause = getattr(exc, 'reason', None)
-        underlying = cause if isinstance(cause, BaseException) else exc
-        is_tls = (isinstance(underlying, ssl.SSLError)
-                  or 'SSL' in type(underlying).__name__
-                  or 'CERTIFICATE_VERIFY_FAILED' in str(exc))
+        # tell a TLS rejection from a timeout from a plain connect failure.
+        info, is_tls, _ = classify_transport_error(exc)
         error = {'status': 'error', 'reason': type(exc).__name__,
-                 'error_type': type(underlying).__name__,
-                 'error_detail': str(underlying)[:500],
-                 'error_stage': 'tls_handshake' if is_tls else 'baseline_connectivity',
                  'active_checks_executed': False,
                  'evidence': [], 'version': None, 'fixed_version': None}
+        error.update(info)
         if is_tls and not insecure_tls:
             error['tls_hint'] = ('Certificate verification failed. For an authorized lab whose '
                                  'target uses a self-signed or IP-only certificate, re-run with '

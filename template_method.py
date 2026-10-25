@@ -15,7 +15,8 @@ import time
 import urllib.error
 import urllib.request
 
-from php_version import NoRedirect, _build_opener, assess, classify_headers, parse_url
+from php_version import (NoRedirect, _build_opener, assess, classify_headers,
+                          classify_transport_error, parse_url)
 
 SOURCE_URL = 'https://github.com/projectdiscovery/nuclei-templates/blob/main/http/cves/2026/CVE-2026-109618.yaml'
 SOURCE_BLOB = '9d89d77dbd5f269dd0039534f204c16389911f46'
@@ -51,14 +52,23 @@ def exchange(url, body, boundary, timeout, insecure_tls=False):
         with response:
             content = response.read(MAX_RESPONSE_BYTES + 1)
             headers = classify_headers(response.headers)
-            return {'http_status': response.code, 'version': headers['version'],
-                    'response_bytes_captured': min(len(content), MAX_RESPONSE_BYTES),
-                    'response_truncated': len(content) > MAX_RESPONSE_BYTES,
-                    'memory_error_signature': all(x in content[:MAX_RESPONSE_BYTES] for x in
-                        (b'Allowed memory size of', b'bytes exhausted', b'Unknown')),
-                    'elapsed_seconds': round(time.monotonic() - started, 4)}
+            record = {'http_status': response.code, 'version': headers['version'],
+                      'response_bytes_captured': min(len(content), MAX_RESPONSE_BYTES),
+                      'response_truncated': len(content) > MAX_RESPONSE_BYTES,
+                      'memory_error_signature': all(x in content[:MAX_RESPONSE_BYTES] for x in
+                          (b'Allowed memory size of', b'bytes exhausted', b'Unknown')),
+                      'elapsed_seconds': round(time.monotonic() - started, 4)}
+            # Record where a redirect points so a login/redirect route is obvious
+            # in the report (kept for diagnostics only; the redirect is not followed).
+            if 300 <= response.code < 400:
+                record['location'] = response.headers.get('Location')
+            return record
     except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
-        return {'error': type(exc).__name__, 'elapsed_seconds': round(time.monotonic() - started, 4)}
+        info, _, _ = classify_transport_error(exc)
+        return {'error': info['error_type'], 'error_stage': info['error_stage'],
+                'error_detail': info['error_detail'],
+                'timeout_category': info.get('timeout_category'),
+                'elapsed_seconds': round(time.monotonic() - started, 4)}
 
 
 def check(url, timeout=5, insecure_tls=False):
@@ -80,8 +90,25 @@ def check(url, timeout=5, insecure_tls=False):
         return record
 
     control = send(control_body, 'x', 'control')
-    if control.get('error') or control.get('http_status', 0) not in range(200, 300):
-        out['reason'] = 'Control failed, redirected or was rejected; no active verdict possible.'
+    out['control_status'] = control.get('http_status')
+    if control.get('error'):
+        out['failure_stage'] = control.get('error_stage', 'control_request')
+        if control.get('timeout_category'):
+            out['timeout_category'] = control['timeout_category']
+        out['reason'] = 'Control request failed before a response; no active verdict possible.'
+        return out
+    status = control.get('http_status', 0)
+    if status not in range(200, 300):
+        if 300 <= status < 400:
+            out['redirect_location'] = control.get('location')
+            out['endpoint_suitability'] = (
+                'Control POST was redirected (HTTP %s). This endpoint is unsuitable for active '
+                'multipart probing; supply a non-redirecting in-scope endpoint (for example the '
+                'application root or an upload handler) as --url or --path.' % status)
+            out['reason'] = ('Control redirected; no active verdict possible '
+                             '(endpoint is likely a login or redirect route).')
+        else:
+            out['reason'] = 'Control was rejected (HTTP %s); no active verdict possible.' % status
         return out
     versions = set()
     if control.get('version'):

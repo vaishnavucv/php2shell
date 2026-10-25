@@ -267,6 +267,27 @@ def run_chain(url, origins, authorization_ref, paths=(), timeout=5, active_scrip
             if active_aborted:
                 break
     findings = decide(passive, active, attestation)
+    # Separate version-based exposure from active validation so a reader never
+    # mistakes "advertises an old version" for "actively verified vulnerable".
+    SEVERITY = ['affected_runtime_verified', 'evidence_conflict', 'suspicious_behavior',
+                'potentially_affected', 'fix_level_advertised', 'patch_verified', 'inconclusive']
+    version_statuses = [p.get('status') for p in passive]
+    active_ran = [a for a in active if a.get('method')]
+    active_anomaly = any(a.get('kind') in ('ambiguous_runtime_anomaly', 'unverified_upstream_positive')
+                         for a in active)
+    overall = next((s for s in SEVERITY if s in [f['status'] for f in findings]), 'inconclusive')
+    verdict_summary = {
+        'version_assessment': ('potentially_affected' if 'potentially_affected' in version_statuses
+                               else 'fix_level_advertised' if 'upstream_fix_level_observed' in version_statuses
+                               else 'error' if version_statuses and all(s == 'error' for s in version_statuses)
+                               else 'inconclusive'),
+        'active_assessment': ('anomaly_observed' if active_anomaly
+                              else 'inconclusive' if active_ran
+                              else 'not_run'),
+        'active_executed': bool(active_ran),
+        'overall_status': overall,
+        'rce_confirmed': False,
+    }
     catalog = [
         {'id': 'remote_version', 'enabled': True, 'family': 'advertised_runtime_version'},
         {'id': 'projectdiscovery_python', 'enabled': 'template' in methods, 'family': 'multipart_oom_behavior'},
@@ -294,10 +315,11 @@ def run_chain(url, origins, authorization_ref, paths=(), timeout=5, active_scrip
                          'php_signal_observed': item.get('php_signal_observed', False),
                          'signed_runtime_evidence_supplied': attestation is not None,
                          'interpretation': 'HTTP reachability and banners do not prove access to every PHP backend.'})
-    return {'schema_version': '3.1', 'scanner_version': '1.0.0-rc4', 'scanner': 'SIGiL PHP2Shell Chain',
+    return {'schema_version': '3.1', 'scanner_version': '1.0.0-rc5', 'scanner': 'SIGiL PHP2Shell Chain',
             'ruleset_date': '2026-10-25', 'target': url,
             'profile': profile, 'disruptive_testing_opt_in': bool(allow_disruptive),
             'tls_verification': 'disabled' if insecure_tls else 'enabled',
+            'verdict_summary': verdict_summary,
             'coverage': coverage,
             'assessment_type': 'PHP2Shell-specific assessment, not a complete PHP application VAPT',
             'authorization_ref': authorization_ref, 'findings': findings,
