@@ -24,7 +24,7 @@ RUN python -m unittest -v
 
 FROM base AS runtime
 LABEL org.opencontainers.image.title="SIGiL PHP2Shell Scanner" \
-      org.opencontainers.image.version="1.0.0-rc3" \
+      org.opencontainers.image.version="1.0.0-rc4" \
       org.opencontainers.image.description="PHP2Shell assessment chain with attributed ProjectDiscovery and Assetnote methods"
 
 ENTRYPOINT ["python", "/app/scanner.py"]

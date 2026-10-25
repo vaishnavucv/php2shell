@@ -39,7 +39,7 @@ class ProductionTests(unittest.TestCase):
              patch('scanner.run_template', return_value=[{'kind': 'no_signal'}]) as active:
             r = run_chain(TARGET, [ORIGIN], 'approved-disruptive-test',
                           active_methods=('template',), allow_disruptive=True)
-        active.assert_called_once_with(TARGET, 5)
+        active.assert_called_once_with(TARGET, 5, False)
         self.assertTrue(r['disruptive_testing_opt_in'])
         self.assertEqual(r['findings'][0]['status'], 'inconclusive')
 
@@ -87,33 +87,56 @@ class ProductionTests(unittest.TestCase):
                 server.shutdown()
                 t.join()
 
-    @unittest.skipUnless(shutil.which('openssl'), 'OpenSSL is required for the self-signed TLS fixture')
-    def test_untrusted_https_certificate_is_rejected(self):
+    def _self_signed_server(self, tmp):
+        """Start a throwaway HTTPS server with a self-signed cert that advertises
+        a vulnerable PHP banner. Returns (server, thread, base_url)."""
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 self.send_response(200)
+                self.send_header('X-Powered-By', 'PHP/8.5.10')
                 self.end_headers()
             def log_message(self, *args):
                 pass
+        cert, key = Path(tmp) / 'cert.pem', Path(tmp) / 'key.pem'
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+            '-keyout', str(key), '-out', str(cert), '-days', '1', '-subj', '/CN=localhost'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=10)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server, thread, f'https://127.0.0.1:{server.server_port}'
+
+    @unittest.skipUnless(shutil.which('openssl'), 'OpenSSL is required for the self-signed TLS fixture')
+    def test_untrusted_https_certificate_is_rejected_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:
-            cert, key = Path(tmp) / 'cert.pem', Path(tmp) / 'key.pem'
-            subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
-                '-keyout', str(key), '-out', str(cert), '-days', '1', '-subj', '/CN=localhost'],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=10)
-            with ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
-                context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-                context.load_cert_chain(cert, key)
-                server.socket = context.wrap_socket(server.socket, server_side=True)
-                t = threading.Thread(target=server.serve_forever, daemon=True)
-                t.start()
-                try:
-                    base = f'https://127.0.0.1:{server.server_port}'
-                    r = scan(base + '/', [base], 'tls-fixture')
-                    self.assertEqual(r['status'], 'error')
-                    self.assertEqual(r['reason'], 'URLError')
-                finally:
-                    server.shutdown()
-                    t.join()
+            server, t, base = self._self_signed_server(tmp)
+            try:
+                r = scan(base + '/', [base], 'tls-fixture')
+                self.assertEqual(r['status'], 'error')
+                self.assertEqual(r['reason'], 'URLError')  # backward-compatible field
+                self.assertEqual(r['error_stage'], 'tls_handshake')
+                self.assertEqual(r['tls_verification'], 'enabled')
+                self.assertIn('--insecure-tls', r['tls_hint'])
+            finally:
+                server.shutdown()
+                t.join()
+
+    @unittest.skipUnless(shutil.which('openssl'), 'OpenSSL is required for the self-signed TLS fixture')
+    def test_insecure_tls_opt_in_accepts_self_signed_and_assesses_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server, t, base = self._self_signed_server(tmp)
+            try:
+                r = scan(base + '/', [base], 'tls-fixture', insecure_tls=True)
+                self.assertEqual(r['http_status'], 200)
+                self.assertEqual(r['tls_verification'], 'disabled')
+                self.assertEqual(r['observed_versions'], ['8.5.10'])
+                self.assertEqual(r['status'], 'potentially_affected')
+            finally:
+                server.shutdown()
+                t.join()
 
 
 if __name__ == '__main__':

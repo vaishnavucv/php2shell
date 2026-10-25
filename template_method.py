@@ -15,7 +15,7 @@ import time
 import urllib.error
 import urllib.request
 
-from php_version import NoRedirect, assess, classify_headers, parse_url
+from php_version import NoRedirect, _build_opener, assess, classify_headers, parse_url
 
 SOURCE_URL = 'https://github.com/projectdiscovery/nuclei-templates/blob/main/http/cves/2026/CVE-2026-109618.yaml'
 SOURCE_BLOB = '9d89d77dbd5f269dd0039534f204c16389911f46'
@@ -37,8 +37,8 @@ def build_probe(size_mib, parts):
     return body[:-1]
 
 
-def exchange(url, body, boundary, timeout):
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+def exchange(url, body, boundary, timeout, insecure_tls=False):
+    opener = _build_opener(insecure_tls)
     req = urllib.request.Request(url, data=body, method='POST', headers={
         'Content-Type': 'multipart/form-data; boundary=' + boundary,
         'User-Agent': 'SIGiL-PHP2Shell-TemplateMethod/1.0', 'Connection': 'close'})
@@ -61,7 +61,7 @@ def exchange(url, body, boundary, timeout):
         return {'error': type(exc).__name__, 'elapsed_seconds': round(time.monotonic() - started, 4)}
 
 
-def check(url, timeout=5):
+def check(url, timeout=5, insecure_tls=False):
     parse_url(url)
     if not 0 < timeout <= 30:
         raise ValueError('Timeout must be between 0 and 30 seconds.')
@@ -75,7 +75,7 @@ def check(url, timeout=5):
     def send(body, boundary, role):
         out['request_count'] += 1
         out['request_body_bytes'] += len(body)
-        record = exchange(url, body, boundary, timeout)
+        record = exchange(url, body, boundary, timeout, insecure_tls)
         out['observations'].append(dict(record, role=role, request_body_bytes=len(body)))
         return record
 
@@ -124,8 +124,10 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--url', required=True)
     p.add_argument('--timeout', type=int, default=5)
+    p.add_argument('--insecure-tls', action='store_true',
+                   help='Opt in to skip TLS certificate verification (authorized labs only)')
     a = p.parse_args()
-    print(json.dumps(check(a.url, a.timeout)))
+    print(json.dumps(check(a.url, a.timeout, a.insecure_tls)))
 
 
 if __name__ == '__main__':

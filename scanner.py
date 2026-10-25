@@ -94,7 +94,7 @@ def active_signals(document):
     return result
 
 
-def run_active(script, url, timeout):
+def run_active(script, url, timeout, insecure_tls=False):
     """Execute the reviewed upstream scanner without shell interpolation."""
     script = Path(script).resolve(strict=True)
     data = script.read_bytes()
@@ -105,6 +105,10 @@ def run_active(script, url, timeout):
         out = Path(temp) / 'result.json'
         argv = [sys.executable, str(script), '-u', url, '-t', '1', '--timeout',
                 str(timeout), '--all-results', '--no-color', '-o', str(out)]
+        if insecure_tls:
+            # The pinned upstream scanner already exposes --insecure (verify_ssl
+            # -> CERT_NONE); pass it through rather than editing the vendored file.
+            argv.append('--insecure')
         # Credentials and proxy environment variables are not forwarded.
         env = {k: v for k, v in os.environ.items() if k in
                ('PATH', 'SYSTEMROOT', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'LANG', 'VIRTUAL_ENV')}
@@ -138,10 +142,12 @@ def run_active(script, url, timeout):
                      'reason': 'Upstream execution exceeded deadline.'}]
 
 
-def run_template(url, timeout):
+def run_template(url, timeout, insecure_tls=False):
     """Run the Python method without Nuclei, with an outer stage deadline."""
     argv = [sys.executable, '-s', str(Path(__file__).with_name('template_method.py')),
             '--url', url, '--timeout', str(timeout)]
+    if insecure_tls:
+        argv.append('--insecure-tls')
     try:
         proc = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True,
                               text=True, timeout=timeout * 6 + 10, check=False, shell=False)
@@ -195,7 +201,7 @@ def decide(passive, active, attestation=None):
 
 def run_chain(url, origins, authorization_ref, paths=(), timeout=5, active_script=None,
               attestation=None, budget=1, active_methods=(), profile='production',
-              allow_disruptive=False):
+              allow_disruptive=False, insecure_tls=False):
     started = time.monotonic()
     timings = []
 
@@ -233,7 +239,7 @@ def run_chain(url, origins, authorization_ref, paths=(), timeout=5, active_scrip
     if 'assetnote' in methods and not active_script:
         active_script = str(Path(__file__).parent / 'vendor' / 'assetnote_scanner.py')
     passive = [timed('remote_version_assessment', u,
-                    lambda u=u: scan(u, origins, authorization_ref, timeout)) for u in urls]
+                    lambda u=u: scan(u, origins, authorization_ref, timeout, insecure_tls)) for u in urls]
     active = []
     recovery = []
     active_aborted = False
@@ -245,12 +251,12 @@ def run_chain(url, origins, authorization_ref, paths=(), timeout=5, active_scrip
                 continue
             for method in methods:
                 results = timed(method + '_active_assessment', p['target'],
-                    lambda: run_template(p['target'], timeout) if method == 'template'
-                    else run_active(active_script, p['target'], timeout))
+                    lambda: run_template(p['target'], timeout, insecure_tls) if method == 'template'
+                    else run_active(active_script, p['target'], timeout, insecure_tls))
                 active.extend(dict(x, target=p['target'], method=method,
                                    evidence_family='multipart_oom_behavior') for x in results)
                 health = timed('post_' + method + '_recovery', p['target'],
-                               lambda: scan(p['target'], origins, authorization_ref, timeout))
+                               lambda: scan(p['target'], origins, authorization_ref, timeout, insecure_tls))
                 recovery.append({'after_method': method, 'target': p['target'],
                                  'http_status': health.get('http_status'), 'status': health['status']})
                 if health.get('http_status', 0) not in range(200, 300):
@@ -288,9 +294,10 @@ def run_chain(url, origins, authorization_ref, paths=(), timeout=5, active_scrip
                          'php_signal_observed': item.get('php_signal_observed', False),
                          'signed_runtime_evidence_supplied': attestation is not None,
                          'interpretation': 'HTTP reachability and banners do not prove access to every PHP backend.'})
-    return {'schema_version': '3.1', 'scanner_version': '1.0.0-rc3', 'scanner': 'SIGiL PHP2Shell Chain',
+    return {'schema_version': '3.1', 'scanner_version': '1.0.0-rc4', 'scanner': 'SIGiL PHP2Shell Chain',
             'ruleset_date': '2026-10-25', 'target': url,
             'profile': profile, 'disruptive_testing_opt_in': bool(allow_disruptive),
+            'tls_verification': 'disabled' if insecure_tls else 'enabled',
             'coverage': coverage,
             'assessment_type': 'PHP2Shell-specific assessment, not a complete PHP application VAPT',
             'authorization_ref': authorization_ref, 'findings': findings,
@@ -327,6 +334,9 @@ def main():
     p.add_argument('--assetnote-script')
     p.add_argument('--active-endpoint-budget', type=int, default=1, choices=range(1, 4))
     p.add_argument('--attestation', help='HMAC-authenticated backend web-runtime evidence')
+    p.add_argument('--insecure-tls', action='store_true',
+                   help='Opt in to skip TLS certificate verification for the whole chain '
+                        '(authorized labs with self-signed or IP-only certificates)')
     p.add_argument('--output')
     a = p.parse_args()
     if a.assetnote_script and not a.active:
@@ -344,7 +354,8 @@ def main():
         evidence = load_attestation(a.attestation, a.url, os.environ.get('SIGIL_EVIDENCE_KEY')) if a.attestation else None
         report = run_chain(a.url, a.allow_origin, a.authorization_ref, a.path, a.timeout,
                            active_script if 'assetnote' in methods else None, evidence,
-                           a.active_endpoint_budget, methods, a.profile, a.allow_disruptive)
+                           a.active_endpoint_budget, methods, a.profile, a.allow_disruptive,
+                           a.insecure_tls)
         encoded = json.dumps(report, indent=2)
         if a.output:
             Path(a.output).write_text(encoded + '\n')

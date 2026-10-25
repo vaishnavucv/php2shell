@@ -5,6 +5,7 @@ import datetime as dt
 import http.client
 import json
 import re
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -73,6 +74,31 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def https_context(insecure_tls):
+    """TLS context for HTTPS requests.
+
+    Certificate verification is on by default. An explicit opt-in disables it
+    for authorized labs whose targets use self-signed or IP-only certificates
+    (the common case for a bare https://ip:port endpoint). This mirrors how
+    active probing is gated behind an explicit --allow-disruptive opt-in: the
+    risk is accepted deliberately, never silently.
+    """
+    if not insecure_tls:
+        return None
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+def _build_opener(insecure_tls):
+    handlers = [urllib.request.ProxyHandler({}), NoRedirect()]
+    context = https_context(insecure_tls)
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    return urllib.request.build_opener(*handlers)
+
+
 def classify_headers(headers):
     evidence = []
     versions = set()
@@ -101,7 +127,7 @@ def classify_headers(headers):
     return result
 
 
-def scan(url, allowed_origins, authorization_ref, timeout=5):
+def scan(url, allowed_origins, authorization_ref, timeout=5, insecure_tls=False):
     parsed, origin = parse_url(url)
     if not authorization_ref or not authorization_ref.strip():
         raise ValueError('An authorization reference is required.')
@@ -122,10 +148,11 @@ def scan(url, allowed_origins, authorization_ref, timeout=5):
         'target': url, 'authorization_ref': authorization_ref,
         'assessment_method': 'http_response_headers', 'rce_confirmed': False,
         'request_method': 'GET', 'request_count': 0, 'redirects_followed': False,
+        'tls_verification': 'disabled' if insecure_tls else 'enabled',
         'warnings': WARNINGS, 'references': REFERENCES,
     }
-    # Ignore environment proxies. HTTPS uses Python's certificate validation.
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    # Ignore environment proxies. HTTPS verification follows the opt-in above.
+    opener = _build_opener(insecure_tls)
     request = urllib.request.Request(url, headers={
         'User-Agent': 'SIGiL-PHP2Shell-Assessment/1.0',
         'Accept': '*/*', 'Connection': 'close',
@@ -144,8 +171,24 @@ def scan(url, allowed_origins, authorization_ref, timeout=5):
                 result['warnings'] = [*WARNINGS, 'Redirect not followed; assess the approved destination explicitly.']
             # Do not download or retain the response body.
     except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
-        result.update({'status': 'error', 'reason': type(exc).__name__,
-                       'evidence': [], 'version': None, 'fixed_version': None})
+        # URLError wraps the real cause in .reason; surface it so an operator can
+        # tell a TLS rejection from DNS/TCP failures instead of a bare "URLError".
+        cause = getattr(exc, 'reason', None)
+        underlying = cause if isinstance(cause, BaseException) else exc
+        is_tls = (isinstance(underlying, ssl.SSLError)
+                  or 'SSL' in type(underlying).__name__
+                  or 'CERTIFICATE_VERIFY_FAILED' in str(exc))
+        error = {'status': 'error', 'reason': type(exc).__name__,
+                 'error_type': type(underlying).__name__,
+                 'error_detail': str(underlying)[:500],
+                 'error_stage': 'tls_handshake' if is_tls else 'baseline_connectivity',
+                 'active_checks_executed': False,
+                 'evidence': [], 'version': None, 'fixed_version': None}
+        if is_tls and not insecure_tls:
+            error['tls_hint'] = ('Certificate verification failed. For an authorized lab whose '
+                                 'target uses a self-signed or IP-only certificate, re-run with '
+                                 '--insecure-tls to accept it deliberately.')
+        result.update(error)
     return result
 
 
@@ -157,6 +200,8 @@ def main():
     parser.add_argument('--allow-origin', action='append', default=[])
     parser.add_argument('--authorization-ref', default='')
     parser.add_argument('--timeout', type=float, default=5)
+    parser.add_argument('--insecure-tls', action='store_true',
+                        help='Opt in to skip TLS certificate verification (authorized labs only)')
     args = parser.parse_args()
     if args.version is not None:
         result = assess(args.version)
@@ -165,7 +210,8 @@ def main():
                        'rce_confirmed': False, 'warnings': WARNINGS, 'references': REFERENCES})
     else:
         try:
-            result = scan(args.url, args.allow_origin, args.authorization_ref, args.timeout)
+            result = scan(args.url, args.allow_origin, args.authorization_ref, args.timeout,
+                          insecure_tls=args.insecure_tls)
         except ValueError as exc:
             parser.error(str(exc))
     print(json.dumps(result, indent=2))
