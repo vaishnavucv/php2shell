@@ -91,6 +91,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SIGIL_SOURCE_COMMIT=${{ github.sha }}
           # No build cache (see the test step) — guarantees the published image
           # is built from the committed source, not a stale cached layer.
           no-cache: true

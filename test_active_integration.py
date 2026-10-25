@@ -53,8 +53,11 @@ class ActiveIntegration(unittest.TestCase):
                 # rc6: methods that ran are reported; execution status is independent of verdict.
                 # With no explicit methods but an active_script supplied, assetnote runs by default.
                 effective = list(methods) or ['assetnote']
-                self.assertEqual(report['active_methods_executed'], effective)
-                self.assertEqual(report['active_evidence'][0]['execution_status'], 'executed')
+                self.assertEqual(report['active_methods_validated'], effective)
+                self.assertEqual(report['active_methods_executed'], effective)  # back-compat alias
+                self.assertEqual(report['active_evidence'][0]['execution_status'], 'active_validation_completed')
+                self.assertTrue(report['active_evidence'][0]['execution']['active_validation_completed'])
+                self.assertEqual(report['active_endpoint_suitability'], 'suitable')
             finally:
                 server.shutdown()
                 t.join()

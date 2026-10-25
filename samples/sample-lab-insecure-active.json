@@ -1,19 +1,30 @@
 {
   "schema_version": "3.2",
-  "scanner_version": "1.0.0-rc6",
+  "scanner_version": "1.0.0-rc7",
   "scanner": "SIGiL PHP2Shell Chain",
   "ruleset_date": "2026-10-25",
-  "target": "https://127.0.0.1:52946/login",
+  "target": "https://127.0.0.1:55735/login",
+  "build": {
+    "scanner_version": "1.0.0-rc7",
+    "source_commit": "local-sample",
+    "assetnote_blob": "287e97898ab759f6692c698f83d9a30d81db4fbb",
+    "template_blob": "9d89d77dbd5f269dd0039534f204c16389911f46"
+  },
   "profile": "lab",
   "disruptive_testing_opt_in": true,
   "tls_verification": "disabled",
   "ca_cert_supplied": false,
-  "active_methods_executed": [
-    "template"
+  "baseline_reachability": "reachable",
+  "active_endpoint_suitability": "authentication_required",
+  "active_methods_invoked": [
+    "template",
+    "assetnote"
   ],
+  "active_methods_validated": [],
+  "active_methods_executed": [],
   "coverage": [
     {
-      "target": "https://127.0.0.1:52946/login",
+      "target": "https://127.0.0.1:55735/login",
       "http_status": 200,
       "access_observation": "http_response_observed",
       "redirect_location": null,
@@ -26,10 +37,9 @@
   ],
   "active_validation_status": "inconclusive",
   "remediation_recommendations": [
-    "Verify the web runtime, package revision and vendor backports using trusted inventory.",
-    "Apply the vendor fixes to affected runtimes and restart/redeploy all relevant workers.",
-    "Select an explicitly authorized endpoint accepting multipart POST for active assessment.",
-    "Review TLS trust/hostname and transport failures before any operator-approved reassessment."
+    "Confirm the web runtime, package revision and vendor backports with trusted inventory; an advertised version alone is not proof of an unpatched runtime.",
+    "The active endpoint requires authentication or redirects to a login route. Supply an explicitly authorized, unauthenticated endpoint that accepts a multipart POST via --active-endpoint; scope is never expanded automatically.",
+    "Apply the vendor fixes to affected runtimes and restart/redeploy all relevant workers, then rescan."
   ],
   "assessment_type": "PHP2Shell-specific assessment, not a complete PHP application VAPT",
   "authorization_ref": "VAPT-sample",
@@ -46,10 +56,11 @@
       "evidence_confidence": "low",
       "evidence_provenance": {
         "passive_targets": [
-          "https://127.0.0.1:52946/login"
+          "https://127.0.0.1:55735/login"
         ],
         "active_methods": [
-          "template"
+          "template",
+          "assetnote"
         ],
         "authenticated_runtime_inventory": false
       }
@@ -66,10 +77,11 @@
       "evidence_confidence": "low",
       "evidence_provenance": {
         "passive_targets": [
-          "https://127.0.0.1:52946/login"
+          "https://127.0.0.1:55735/login"
         ],
         "active_methods": [
-          "template"
+          "template",
+          "assetnote"
         ],
         "authenticated_runtime_inventory": false
       }
@@ -84,8 +96,8 @@
         "CVE-2026-109618",
         "CVE-2026-109619"
       ],
-      "checked_at": "2026-10-25T05:57:23.702669+00:00",
-      "target": "https://127.0.0.1:52946/login",
+      "checked_at": "2026-10-25T06:21:41.614681+00:00",
+      "target": "https://127.0.0.1:55735/login",
       "authorization_ref": "VAPT-sample",
       "assessment_method": "http_response_headers",
       "rce_confirmed": false,
@@ -108,7 +120,7 @@
       "redirect_location": null,
       "failure_stage": null,
       "timeout_category": null,
-      "elapsed_seconds": 0.0094,
+      "elapsed_seconds": 0.0075,
       "tls_verification": "disabled",
       "redirect_classification": null,
       "endpoint_suitability": "suitable",
@@ -136,7 +148,7 @@
       "evidence_family": "multipart_oom_behavior",
       "source_url": "https://github.com/projectdiscovery/nuclei-templates/blob/main/http/cves/2026/CVE-2026-109618.yaml",
       "source_blob": "9d89d77dbd5f269dd0039534f204c16389911f46",
-      "target": "https://127.0.0.1:52946/login",
+      "target": "https://127.0.0.1:55735/login",
       "kind": "inconclusive",
       "request_count": 1,
       "request_body_bytes": 41,
@@ -168,41 +180,116 @@
       "reason": "Control redirected; application behavior requires an explicit suitable endpoint.",
       "active_validation_status": "inconclusive",
       "evidence_confidence": "insufficient",
-      "execution_status": "executed",
       "failure_stage": null,
-      "timeout_category": null
+      "timeout_category": null,
+      "execution": {
+        "method_invoked": true,
+        "control_completed": false,
+        "active_validation_completed": false,
+        "vulnerability_confirmed": false
+      },
+      "execution_status": "control_blocked"
+    },
+    {
+      "kind": "inconclusive",
+      "reason": "Transport failed or response redirected/rejected/unhealthy; no active verdict possible.",
+      "observations": [
+        {
+          "http_status": 303,
+          "redirect_location": "/login?user=&direct=1",
+          "failure_stage": null,
+          "timeout_category": null,
+          "elapsed_seconds": 0.0059,
+          "redirects_followed": false,
+          "tls_verification": "disabled",
+          "redirect_classification": "authentication_redirect",
+          "endpoint_suitability": "authentication_required",
+          "version": null,
+          "status": "unknown",
+          "fixed_version": null,
+          "reason": "No exact PHP version exposed; authenticated inventory required.",
+          "php_signal_observed": false,
+          "evidence": [],
+          "observed_versions": [],
+          "role": "control",
+          "request_body_bytes": 42
+        }
+      ],
+      "request_count": 1,
+      "source_commit": "052b56ef4f9bf674aa31ac645068144747bade3d",
+      "source_blob": "287e97898ab759f6692c698f83d9a30d81db4fbb",
+      "control_request_status": 303,
+      "rce_confirmed": false,
+      "redirect_location": "/login?user=&direct=1",
+      "redirect_classification": "authentication_redirect",
+      "endpoint_suitability": "authentication_required",
+      "advertised_version": null,
+      "target": "https://127.0.0.1:55735/login",
+      "method": "assetnote",
+      "evidence_family": "multipart_oom_behavior",
+      "active_validation_status": "inconclusive",
+      "evidence_confidence": "insufficient",
+      "failure_stage": null,
+      "timeout_category": null,
+      "execution": {
+        "method_invoked": true,
+        "control_completed": false,
+        "active_validation_completed": false,
+        "vulnerability_confirmed": false
+      },
+      "execution_status": "control_blocked"
     }
   ],
   "recovery_checks": [
     {
       "after_method": "template",
-      "target": "https://127.0.0.1:52946/login",
+      "target": "https://127.0.0.1:55735/login",
       "http_status": 200,
       "status": "potentially_affected",
       "recovered": true,
       "elapsed_seconds": 0.0054,
       "failure_stage": null,
       "timeout_category": null
+    },
+    {
+      "after_method": "assetnote",
+      "target": "https://127.0.0.1:55735/login",
+      "http_status": 200,
+      "status": "potentially_affected",
+      "recovered": true,
+      "elapsed_seconds": 0.0056,
+      "failure_stage": null,
+      "timeout_category": null
     }
   ],
   "active_stopped_after_recovery_failure": false,
   "timing": {
-    "total_elapsed_seconds": 0.0756,
+    "total_elapsed_seconds": 0.2045,
     "stages": [
       {
         "stage": "remote_version_assessment",
-        "target": "https://127.0.0.1:52946/login",
-        "elapsed_seconds": 0.0103
+        "target": "https://127.0.0.1:55735/login",
+        "elapsed_seconds": 0.0083
       },
       {
         "stage": "template_active_assessment",
-        "target": "https://127.0.0.1:52946/login",
-        "elapsed_seconds": 0.0594
+        "target": "https://127.0.0.1:55735/login",
+        "elapsed_seconds": 0.0503
       },
       {
         "stage": "post_template_recovery",
-        "target": "https://127.0.0.1:52946/login",
+        "target": "https://127.0.0.1:55735/login",
         "elapsed_seconds": 0.0059
+      },
+      {
+        "stage": "assetnote_active_assessment",
+        "target": "https://127.0.0.1:55735/login",
+        "elapsed_seconds": 0.1337
+      },
+      {
+        "stage": "post_assetnote_recovery",
+        "target": "https://127.0.0.1:55735/login",
+        "elapsed_seconds": 0.0061
       }
     ]
   },
@@ -219,7 +306,7 @@
     },
     {
       "id": "assetnote",
-      "enabled": false,
+      "enabled": true,
       "family": "multipart_oom_behavior"
     },
     {
@@ -228,7 +315,7 @@
       "family": "authenticated_runtime_inventory"
     }
   ],
-  "methods_enabled": 2,
+  "methods_enabled": 3,
   "active_method_correlation": "Template and Assetnote share multipart/OOM evidence. They are not independent CVE confirmations.",
   "attestation_verified": false,
   "scope": "Only the explicitly assessed endpoints and declared backend coverage.",

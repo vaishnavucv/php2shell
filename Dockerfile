@@ -23,8 +23,13 @@ COPY test_*.py /app/
 RUN python -m unittest -v
 
 FROM base AS runtime
+# Immutable source identifier: CI passes the exact commit, baked into every
+# report via the SIGIL_SOURCE_COMMIT env var (defaults to "unknown" locally).
+ARG SIGIL_SOURCE_COMMIT=unknown
+ENV SIGIL_SOURCE_COMMIT=${SIGIL_SOURCE_COMMIT}
 LABEL org.opencontainers.image.title="SIGiL PHP2Shell Scanner" \
-      org.opencontainers.image.version="1.0.0-rc6" \
+      org.opencontainers.image.version="1.0.0-rc7" \
+      org.opencontainers.image.revision="${SIGIL_SOURCE_COMMIT}" \
       org.opencontainers.image.description="PHP2Shell assessment chain with attributed ProjectDiscovery and Assetnote methods"
 
 ENTRYPOINT ["python", "/app/scanner.py"]

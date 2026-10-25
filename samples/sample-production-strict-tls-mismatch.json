@@ -1,17 +1,27 @@
 {
   "schema_version": "3.2",
-  "scanner_version": "1.0.0-rc6",
+  "scanner_version": "1.0.0-rc7",
   "scanner": "SIGiL PHP2Shell Chain",
   "ruleset_date": "2026-10-25",
-  "target": "https://127.0.0.1:52946/login",
+  "target": "https://127.0.0.1:55735/login",
+  "build": {
+    "scanner_version": "1.0.0-rc7",
+    "source_commit": "local-sample",
+    "assetnote_blob": "287e97898ab759f6692c698f83d9a30d81db4fbb",
+    "template_blob": "9d89d77dbd5f269dd0039534f204c16389911f46"
+  },
   "profile": "production",
   "disruptive_testing_opt_in": false,
   "tls_verification": "enabled",
   "ca_cert_supplied": false,
+  "baseline_reachability": "unreachable",
+  "active_endpoint_suitability": "not_assessed",
+  "active_methods_invoked": [],
+  "active_methods_validated": [],
   "active_methods_executed": [],
   "coverage": [
     {
-      "target": "https://127.0.0.1:52946/login",
+      "target": "https://127.0.0.1:55735/login",
       "http_status": null,
       "access_observation": "request_failed",
       "redirect_location": null,
@@ -24,10 +34,8 @@
   ],
   "active_validation_status": "not_performed",
   "remediation_recommendations": [
-    "Verify the web runtime, package revision and vendor backports using trusted inventory.",
-    "Apply the vendor fixes to affected runtimes and restart/redeploy all relevant workers.",
-    "Select an explicitly authorized endpoint accepting multipart POST for active assessment.",
-    "Review TLS trust/hostname and transport failures before any operator-approved reassessment."
+    "Resolve the TLS trust/hostname failure (use --ca-cert with a trusted bundle or a certificate valid for the target) before any operator-approved reassessment.",
+    "Apply the vendor fixes to affected runtimes and restart/redeploy all relevant workers, then rescan."
   ],
   "assessment_type": "PHP2Shell-specific assessment, not a complete PHP application VAPT",
   "authorization_ref": "VAPT-sample",
@@ -44,7 +52,7 @@
       "evidence_confidence": "insufficient",
       "evidence_provenance": {
         "passive_targets": [
-          "https://127.0.0.1:52946/login"
+          "https://127.0.0.1:55735/login"
         ],
         "active_methods": [],
         "authenticated_runtime_inventory": false
@@ -62,7 +70,7 @@
       "evidence_confidence": "insufficient",
       "evidence_provenance": {
         "passive_targets": [
-          "https://127.0.0.1:52946/login"
+          "https://127.0.0.1:55735/login"
         ],
         "active_methods": [],
         "authenticated_runtime_inventory": false
@@ -78,8 +86,8 @@
         "CVE-2026-109618",
         "CVE-2026-109619"
       ],
-      "checked_at": "2026-10-25T05:57:23.640922+00:00",
-      "target": "https://127.0.0.1:52946/login",
+      "checked_at": "2026-10-25T06:21:41.559211+00:00",
+      "target": "https://127.0.0.1:55735/login",
       "authorization_ref": "VAPT-sample",
       "assessment_method": "http_response_headers",
       "rce_confirmed": false,
@@ -102,7 +110,7 @@
       "redirect_location": null,
       "failure_stage": "tls",
       "timeout_category": null,
-      "elapsed_seconds": 0.0086,
+      "elapsed_seconds": 0.0092,
       "tls_verification": "enabled",
       "error": "SSLCertVerificationError",
       "error_detail": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1010)",
@@ -121,12 +129,12 @@
   "recovery_checks": [],
   "active_stopped_after_recovery_failure": false,
   "timing": {
-    "total_elapsed_seconds": 0.0098,
+    "total_elapsed_seconds": 0.0103,
     "stages": [
       {
         "stage": "remote_version_assessment",
-        "target": "https://127.0.0.1:52946/login",
-        "elapsed_seconds": 0.0097
+        "target": "https://127.0.0.1:55735/login",
+        "elapsed_seconds": 0.0102
       }
     ]
   },

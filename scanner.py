@@ -266,30 +266,97 @@ def run_chain(url, origins, authorization_ref, paths=(), timeout=5, active_scrip
                     break
             if active_aborted:
                 break
+    # Kinds that mean the method's probes actually ran to a verdict (as opposed
+    # to stopping at an unsuitable/redirected control or a transport failure).
+    VALIDATED_KINDS = ('version_only', 'no_signal', 'ambiguous_runtime_anomaly',
+                       'unverified_upstream_positive')
     for item in active:
         item.setdefault('active_validation_status', 'inconclusive' if item['kind'] == 'inconclusive'
                         else 'anomaly_observed' if item['kind'] in ('ambiguous_runtime_anomaly', 'unverified_upstream_positive')
                         else 'no_confirming_evidence')
         item.setdefault('evidence_confidence', 'insufficient' if item['kind'] == 'inconclusive' else 'low')
-        # Execution status is independent of the verdict: whether the method
-        # actually ran, was skipped as unsuitable, or stopped after recovery.
-        if 'method' not in item:
-            item.setdefault('execution_status', 'skipped_unsuitable_endpoint')
-        elif str(item.get('reason', '')).startswith('Recovery'):
-            item.setdefault('execution_status', 'stopped_after_recovery_failure')
-        else:
-            item.setdefault('execution_status', 'executed')
         for field in ('control_request_status', 'redirect_location', 'failure_stage', 'timeout_category'):
             item.setdefault(field, None)
+        # Execution is reported in four independent stages so control-only runs
+        # are never described as completed vulnerability validation (rc7).
+        invoked = 'method' in item
+        recovery_stop = str(item.get('reason', '')).startswith('Recovery')
+        control_completed = isinstance(item.get('control_request_status'), int) and \
+            200 <= item['control_request_status'] < 300
+        validation_completed = invoked and control_completed and item['kind'] in VALIDATED_KINDS
+        item['execution'] = {
+            'method_invoked': invoked,
+            'control_completed': bool(control_completed),
+            'active_validation_completed': bool(validation_completed),
+            'vulnerability_confirmed': False,
+        }
+        if not invoked:
+            item['execution_status'] = 'skipped_unsuitable_endpoint'
+        elif recovery_stop:
+            item['execution_status'] = 'stopped_after_recovery_failure'
+        elif validation_completed:
+            item['execution_status'] = 'active_validation_completed'
+        elif not control_completed:
+            item['execution_status'] = 'control_blocked'
+        else:
+            item['execution_status'] = 'control_only'
     findings = decide(passive, active, attestation)
     validation = ('not_performed' if not active else 'inconclusive' if any(
         x['active_validation_status'] == 'inconclusive' for x in active) else
         'anomaly_observed' if any(x['active_validation_status'] == 'anomaly_observed' for x in active)
         else 'no_confirming_evidence')
-    recommendations = ['Verify the web runtime, package revision and vendor backports using trusted inventory.',
-        'Apply the vendor fixes to affected runtimes and restart/redeploy all relevant workers.',
-        'Select an explicitly authorized endpoint accepting multipart POST for active assessment.',
-        'Review TLS trust/hostname and transport failures before any operator-approved reassessment.']
+
+    # rc7: two distinct suitability dimensions, so a "suitable" GET baseline is
+    # never read as "suitable for active POST testing".
+    primary = passive[0] if passive else {}
+    pstatus = primary.get('http_status')
+    if primary.get('status') == 'error':
+        baseline_reachability = 'unreachable'
+    elif pstatus is None:
+        baseline_reachability = 'unknown'
+    elif pstatus in (401, 403):
+        baseline_reachability = 'authentication_required'
+    elif 200 <= pstatus < 300:
+        baseline_reachability = 'reachable'
+    elif 300 <= pstatus < 400:
+        baseline_reachability = 'redirect'
+    else:
+        baseline_reachability = 'reachable_nonstandard'
+
+    # Aggregate the POST-control suitability actually observed by the methods.
+    if not methods:
+        active_endpoint_suitability = 'not_assessed'
+    elif any(x['execution'].get('control_completed') for x in active if 'method' in x):
+        active_endpoint_suitability = 'suitable'
+    else:
+        control_suits = {x.get('endpoint_suitability') for x in active}
+        if 'authentication_required' in control_suits:
+            active_endpoint_suitability = 'authentication_required'
+        elif 'redirect_requires_explicit_endpoint' in control_suits:
+            active_endpoint_suitability = 'redirect_requires_explicit_endpoint'
+        else:
+            active_endpoint_suitability = 'unsuitable'
+
+    # Remediation is derived from what actually failed, not a fixed list (rc7).
+    recommendations = []
+    if any(x.get('status') in ('potentially_affected', 'upstream_fix_level_observed') for x in passive):
+        recommendations.append('Confirm the web runtime, package revision and vendor backports with trusted '
+                               'inventory; an advertised version alone is not proof of an unpatched runtime.')
+    if active_endpoint_suitability == 'authentication_required':
+        recommendations.append('The active endpoint requires authentication or redirects to a login route. '
+                               'Supply an explicitly authorized, unauthenticated endpoint that accepts a '
+                               'multipart POST via --active-endpoint; scope is never expanded automatically.')
+    elif active_endpoint_suitability in ('redirect_requires_explicit_endpoint', 'unsuitable'):
+        recommendations.append('The active endpoint did not accept the multipart control. Supply an explicitly '
+                               'authorized endpoint accepting multipart POST via --active-endpoint.')
+    if any(x.get('tls_error_category') for x in passive):
+        recommendations.append('Resolve the TLS trust/hostname failure (use --ca-cert with a trusted bundle or a '
+                               'certificate valid for the target) before any operator-approved reassessment.')
+    if any(not r.get('recovered', True) for r in recovery):
+        recommendations.append('A post-probe recovery check did not return HTTP 2xx; verify worker health '
+                               'independently before further testing.')
+    recommendations.append('Apply the vendor fixes to affected runtimes and restart/redeploy all relevant workers, '
+                           'then rescan.')
     for finding in findings:
         finding.update(active_validation_status=validation,
                        version_exposure_status=('potentially_affected' if any(x.get('status') == 'potentially_affected' for x in passive)
@@ -328,13 +395,29 @@ def run_chain(url, origins, authorization_ref, paths=(), timeout=5, active_scrip
                          'php_signal_observed': item.get('php_signal_observed', False),
                          'signed_runtime_evidence_supplied': attestation is not None,
                          'interpretation': 'HTTP reachability and banners do not prove access to every PHP backend.'})
-    return {'schema_version': '3.2', 'scanner_version': '1.0.0-rc6', 'scanner': 'SIGiL PHP2Shell Chain',
+    def _dedup(seq):
+        seen = []
+        for v in seq:
+            if v and v not in seen:
+                seen.append(v)
+        return seen
+
+    return {'schema_version': '3.2', 'scanner_version': '1.0.0-rc7', 'scanner': 'SIGiL PHP2Shell Chain',
             'ruleset_date': '2026-10-25', 'target': url,
+            'build': {'scanner_version': '1.0.0-rc7',
+                      'source_commit': os.environ.get('SIGIL_SOURCE_COMMIT', 'unknown'),
+                      'assetnote_blob': ASSETNOTE_BLOB, 'template_blob': SOURCE_BLOB},
             'profile': profile, 'disruptive_testing_opt_in': bool(allow_disruptive),
             'tls_verification': 'disabled' if insecure_tls else 'enabled',
             'ca_cert_supplied': bool(ca_cert),
-            'active_methods_executed': [x['method'] for x in active
-                                        if x.get('method') and x.get('execution_status') == 'executed'],
+            'baseline_reachability': baseline_reachability,
+            'active_endpoint_suitability': active_endpoint_suitability,
+            'active_methods_invoked': _dedup(x.get('method') for x in active),
+            'active_methods_validated': _dedup(x.get('method') for x in active
+                                               if x.get('execution', {}).get('active_validation_completed')),
+            # Back-compat alias: methods that reached completed active validation.
+            'active_methods_executed': _dedup(x.get('method') for x in active
+                                              if x.get('execution', {}).get('active_validation_completed')),
             'coverage': coverage, 'active_validation_status': validation,
             'remediation_recommendations': recommendations,
             'assessment_type': 'PHP2Shell-specific assessment, not a complete PHP application VAPT',

@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.0.0-rc7
+
+Reliability of endpoint classification and method-execution reporting. Report
+schema stays `3.2`; `scanner_version` is `1.0.0-rc7`.
+
+### Endpoint classification
+- Baseline GET reachability and active POST endpoint suitability are now two
+  distinct top-level fields: `baseline_reachability`
+  (`reachable` / `redirect` / `authentication_required` / `unreachable` / …)
+  and `active_endpoint_suitability` (`suitable` / `authentication_required` /
+  `redirect_requires_explicit_endpoint` / `unsuitable` / `not_assessed`),
+  aggregated consistently across methods. A reachable login page is therefore
+  never reported as "suitable" for active testing.
+- HTTP 303 and the redirect destination are preserved; an authentication
+  redirect stays **inconclusive** (never vulnerable or safe). Redirects are not
+  followed and scope is never expanded.
+
+### Method execution reporting
+- Each active-evidence entry carries an `execution` object with four
+  independent flags: `method_invoked`, `control_completed`,
+  `active_validation_completed`, `vulnerability_confirmed`. A control that
+  redirected (no 2xx) now reports `execution_status: control_blocked` and is
+  never described as completed validation.
+- Header lists `active_methods_invoked` and `active_methods_validated`
+  separately (`active_methods_executed` kept as a back-compat alias of
+  validated). Per-method outcomes and reasons are preserved.
+
+### Reporting consistency
+- Remediation recommendations are generated from observed failures (auth
+  redirect → ask for an explicit `--active-endpoint`; TLS error → fix trust or
+  use `--ca-cert`; failed recovery → verify worker health), not a fixed list.
+- A `build` block records the immutable `source_commit` (baked at image build
+  via `SIGIL_SOURCE_COMMIT`) alongside `scanner_version` and the pinned
+  upstream blobs; the image also carries `org.opencontainers.image.revision`.
+- Regression tests assert there is no contradiction between suitability fields
+  and validation/confirmation status.
+
+### Runtime evidence & safety (unchanged guarantees, retested)
+- Advertised PHP versions stay separate from trusted runtime inventory; CVE
+  fixed-version mappings and vendor backports are honoured; version evidence is
+  never reported as confirmed RCE.
+- TLS verification on by default; explicit lab-only `--insecure-tls` / trusted
+  `--ca-cert`; active validation needs an operator-approved suitable endpoint;
+  no automatic disruptive retries; recovery validated independently of findings.
+
 ## 1.0.0-rc6
 
 TLS policy, endpoint-suitability and reporting hardening. Report schema stays
