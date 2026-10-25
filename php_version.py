@@ -5,8 +5,6 @@ import datetime as dt
 import http.client
 import json
 import re
-import socket
-import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -75,57 +73,6 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def https_context(insecure_tls):
-    """TLS context for HTTPS requests.
-
-    Certificate verification is on by default. An explicit opt-in disables it
-    for authorized labs whose targets use self-signed or IP-only certificates
-    (the common case for a bare https://ip:port endpoint). This mirrors how
-    active probing is gated behind an explicit --allow-disruptive opt-in: the
-    risk is accepted deliberately, never silently.
-    """
-    if not insecure_tls:
-        return None
-    context = ssl.create_default_context()
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-    return context
-
-
-def _build_opener(insecure_tls):
-    handlers = [urllib.request.ProxyHandler({}), NoRedirect()]
-    context = https_context(insecure_tls)
-    if context is not None:
-        handlers.append(urllib.request.HTTPSHandler(context=context))
-    return urllib.request.build_opener(*handlers)
-
-
-def classify_transport_error(exc):
-    """Turn a urllib/OSError into a structured diagnostic so an operator can tell
-    a TLS rejection from a timeout from a plain connect failure. Returns a dict
-    plus (is_tls, is_timeout) so callers can add a hint without re-checking."""
-    cause = getattr(exc, 'reason', None)
-    underlying = cause if isinstance(cause, BaseException) else exc
-    name = type(underlying).__name__
-    text = str(underlying)
-    is_tls = (isinstance(underlying, ssl.SSLError)
-              or 'SSL' in name or 'CERTIFICATE_VERIFY_FAILED' in str(exc))
-    is_timeout = (isinstance(underlying, (socket.timeout, TimeoutError))
-                  or 'timed out' in text.lower())
-    if is_tls:
-        stage = 'tls_handshake'
-    elif is_timeout:
-        stage = 'timeout'
-    else:
-        stage = 'baseline_connectivity'
-    info = {'error_type': name, 'error_detail': text[:500], 'error_stage': stage}
-    if is_timeout:
-        # urllib surfaces a single socket timeout; it cannot reliably separate a
-        # connect timeout from a read timeout, so we report the honest category.
-        info['timeout_category'] = 'socket_timeout'
-    return info, is_tls, is_timeout
-
-
 def classify_headers(headers):
     evidence = []
     versions = set()
@@ -154,7 +101,7 @@ def classify_headers(headers):
     return result
 
 
-def scan(url, allowed_origins, authorization_ref, timeout=5, insecure_tls=False):
+def scan(url, allowed_origins, authorization_ref, timeout=5, insecure_tls=False, ca_cert=None):
     parsed, origin = parse_url(url)
     if not authorization_ref or not authorization_ref.strip():
         raise ValueError('An authorization reference is required.')
@@ -175,41 +122,23 @@ def scan(url, allowed_origins, authorization_ref, timeout=5, insecure_tls=False)
         'target': url, 'authorization_ref': authorization_ref,
         'assessment_method': 'http_response_headers', 'rce_confirmed': False,
         'request_method': 'GET', 'request_count': 0, 'redirects_followed': False,
-        'tls_verification': 'disabled' if insecure_tls else 'enabled',
         'warnings': WARNINGS, 'references': REFERENCES,
     }
-    # Ignore environment proxies. HTTPS verification follows the opt-in above.
-    opener = _build_opener(insecure_tls)
-    request = urllib.request.Request(url, headers={
-        'User-Agent': 'SIGiL-PHP2Shell-Assessment/1.0',
-        'Accept': '*/*', 'Connection': 'close',
-    }, method='GET')
-    try:
-        result['request_count'] = 1
-        try:
-            response = opener.open(request, timeout=timeout)
-        except urllib.error.HTTPError as exc:
-            # Error/redirect response headers still provide evidence.
-            response = exc
-        with response:
-            result['http_status'] = response.code
-            result.update(classify_headers(response.headers))
-            if 300 <= response.code < 400:
-                result['warnings'] = [*WARNINGS, 'Redirect not followed; assess the approved destination explicitly.']
-            # Do not download or retain the response body.
-    except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
-        # URLError wraps the real cause in .reason; surface it so an operator can
-        # tell a TLS rejection from a timeout from a plain connect failure.
-        info, is_tls, _ = classify_transport_error(exc)
-        error = {'status': 'error', 'reason': type(exc).__name__,
-                 'active_checks_executed': False,
-                 'evidence': [], 'version': None, 'fixed_version': None}
-        error.update(info)
-        if is_tls and not insecure_tls:
-            error['tls_hint'] = ('Certificate verification failed. For an authorized lab whose '
-                                 'target uses a self-signed or IP-only certificate, re-run with '
-                                 '--insecure-tls to accept it deliberately.')
-        result.update(error)
+    from http_diagnostics import request_once
+    result['request_count'] = 1
+    record, headers, _ = request_once(url, 'GET', timeout, headers={
+        'User-Agent': 'SIGiL-PHP2Shell-Assessment/1.0', 'Connection': 'close'},
+        insecure_tls=insecure_tls, ca_cert=ca_cert)
+    result.update(record)
+    if headers is not None:
+        result.update(classify_headers(headers))
+    if record.get('error'):
+        result.update({'status': 'error', 'reason': record['error'],
+                       'evidence': [], 'version': None, 'fixed_version': None})
+    if record.get('redirect_classification'):
+        result['warnings'] = [*WARNINGS, 'Redirect not followed; assess the approved destination explicitly.']
+    result['evidence_confidence'] = 'low' if result.get('version') else 'insufficient'
+    result['evidence_provenance'] = 'http_response_headers'
     return result
 
 
@@ -223,6 +152,7 @@ def main():
     parser.add_argument('--timeout', type=float, default=5)
     parser.add_argument('--insecure-tls', action='store_true',
                         help='Opt in to skip TLS certificate verification (authorized labs only)')
+    parser.add_argument('--ca-cert', help='Trusted CA bundle (PEM) for a private PKI; verification stays on')
     args = parser.parse_args()
     if args.version is not None:
         result = assess(args.version)
@@ -232,7 +162,7 @@ def main():
     else:
         try:
             result = scan(args.url, args.allow_origin, args.authorization_ref, args.timeout,
-                          insecure_tls=args.insecure_tls)
+                          insecure_tls=args.insecure_tls, ca_cert=args.ca_cert)
         except ValueError as exc:
             parser.error(str(exc))
     print(json.dumps(result, indent=2))

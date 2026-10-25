@@ -39,7 +39,7 @@ class ProductionTests(unittest.TestCase):
              patch('scanner.run_template', return_value=[{'kind': 'no_signal'}]) as active:
             r = run_chain(TARGET, [ORIGIN], 'approved-disruptive-test',
                           active_methods=('template',), allow_disruptive=True)
-        active.assert_called_once_with(TARGET, 5, False)
+        active.assert_called_once_with(TARGET, 5, False, None)
         self.assertTrue(r['disruptive_testing_opt_in'])
         self.assertEqual(r['findings'][0]['status'], 'inconclusive')
 
@@ -99,8 +99,10 @@ class ProductionTests(unittest.TestCase):
                 pass
         cert, key = Path(tmp) / 'cert.pem', Path(tmp) / 'key.pem'
         subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
-            '-keyout', str(key), '-out', str(cert), '-days', '1', '-subj', '/CN=localhost'],
+            '-keyout', str(key), '-out', str(cert), '-days', '1', '-subj', '/CN=localhost',
+            '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost'],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=10)
+        self._cert = cert
         server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(cert, key)
@@ -114,12 +116,28 @@ class ProductionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             server, t, base = self._self_signed_server(tmp)
             try:
+                # Self-signed cert is untrusted by the system store -> rejected by default.
                 r = scan(base + '/', [base], 'tls-fixture')
                 self.assertEqual(r['status'], 'error')
-                self.assertEqual(r['reason'], 'URLError')  # backward-compatible field
-                self.assertEqual(r['error_stage'], 'tls_handshake')
+                self.assertEqual(r['reason'], 'SSLCertVerificationError')
+                self.assertEqual(r['failure_stage'], 'tls')
+                self.assertEqual(r['tls_error_category'], 'certificate_verification_failed')
                 self.assertEqual(r['tls_verification'], 'enabled')
-                self.assertIn('--insecure-tls', r['tls_hint'])
+            finally:
+                server.shutdown()
+                t.join()
+
+    @unittest.skipUnless(shutil.which('openssl'), 'OpenSSL is required for the self-signed TLS fixture')
+    def test_trusted_ca_bundle_accepts_matching_certificate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server, t, base = self._self_signed_server(tmp)
+            try:
+                # Same self-signed cert, but supplied as the trusted CA bundle and
+                # reached via an address covered by its SAN -> verification passes.
+                r = scan(base + '/', [base], 'tls-fixture', ca_cert=str(self._cert))
+                self.assertEqual(r['http_status'], 200)
+                self.assertEqual(r['tls_verification'], 'enabled')
+                self.assertEqual(r['observed_versions'], ['8.5.10'])
             finally:
                 server.shutdown()
                 t.join()

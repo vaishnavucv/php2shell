@@ -15,8 +15,7 @@ import time
 import urllib.error
 import urllib.request
 
-from php_version import (NoRedirect, _build_opener, assess, classify_headers,
-                          classify_transport_error, parse_url)
+from php_version import NoRedirect, assess, classify_headers, parse_url
 
 SOURCE_URL = 'https://github.com/projectdiscovery/nuclei-templates/blob/main/http/cves/2026/CVE-2026-109618.yaml'
 SOURCE_BLOB = '9d89d77dbd5f269dd0039534f204c16389911f46'
@@ -38,40 +37,24 @@ def build_probe(size_mib, parts):
     return body[:-1]
 
 
-def exchange(url, body, boundary, timeout, insecure_tls=False):
-    opener = _build_opener(insecure_tls)
-    req = urllib.request.Request(url, data=body, method='POST', headers={
+def exchange(url, body, boundary, timeout, insecure_tls=False, ca_cert=None):
+    from http_diagnostics import request_once
+    record, headers, content = request_once(url, 'POST', timeout, body, {
         'Content-Type': 'multipart/form-data; boundary=' + boundary,
-        'User-Agent': 'SIGiL-PHP2Shell-TemplateMethod/1.0', 'Connection': 'close'})
-    started = time.monotonic()
-    try:
-        try:
-            response = opener.open(req, timeout=timeout)
-        except urllib.error.HTTPError as exc:
-            response = exc
-        with response:
-            content = response.read(MAX_RESPONSE_BYTES + 1)
-            headers = classify_headers(response.headers)
-            record = {'http_status': response.code, 'version': headers['version'],
-                      'response_bytes_captured': min(len(content), MAX_RESPONSE_BYTES),
-                      'response_truncated': len(content) > MAX_RESPONSE_BYTES,
-                      'memory_error_signature': all(x in content[:MAX_RESPONSE_BYTES] for x in
-                          (b'Allowed memory size of', b'bytes exhausted', b'Unknown')),
-                      'elapsed_seconds': round(time.monotonic() - started, 4)}
-            # Record where a redirect points so a login/redirect route is obvious
-            # in the report (kept for diagnostics only; the redirect is not followed).
-            if 300 <= response.code < 400:
-                record['location'] = response.headers.get('Location')
-            return record
-    except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
-        info, _, _ = classify_transport_error(exc)
-        return {'error': info['error_type'], 'error_stage': info['error_stage'],
-                'error_detail': info['error_detail'],
-                'timeout_category': info.get('timeout_category'),
-                'elapsed_seconds': round(time.monotonic() - started, 4)}
+        'User-Agent': 'SIGiL-PHP2Shell-TemplateMethod/1.0', 'Connection': 'close'},
+        MAX_RESPONSE_BYTES, insecure_tls=insecure_tls, ca_cert=ca_cert)
+    if headers is not None:
+        classified = classify_headers(headers)
+        record['version'] = classified['version']
+        record['evidence'] = classified['evidence']
+    record.update(response_bytes_captured=min(len(content), MAX_RESPONSE_BYTES),
+                  response_truncated=len(content) > MAX_RESPONSE_BYTES,
+                  memory_error_signature=all(x in content[:MAX_RESPONSE_BYTES] for x in
+                      (b'Allowed memory size of', b'bytes exhausted', b'Unknown')))
+    return record
 
 
-def check(url, timeout=5, insecure_tls=False):
+def check(url, timeout=5, insecure_tls=False, ca_cert=None):
     parse_url(url)
     if not 0 < timeout <= 30:
         raise ValueError('Timeout must be between 0 and 30 seconds.')
@@ -85,30 +68,19 @@ def check(url, timeout=5, insecure_tls=False):
     def send(body, boundary, role):
         out['request_count'] += 1
         out['request_body_bytes'] += len(body)
-        record = exchange(url, body, boundary, timeout, insecure_tls)
+        record = exchange(url, body, boundary, timeout, insecure_tls, ca_cert)
         out['observations'].append(dict(record, role=role, request_body_bytes=len(body)))
+        if role == 'control':
+            out['control_request_status'] = record.get('http_status')
+        for field in ('redirect_location', 'redirect_classification', 'endpoint_suitability',
+                      'failure_stage', 'timeout_category'):
+            if record.get(field) is not None:
+                out[field] = record[field]
         return record
 
     control = send(control_body, 'x', 'control')
-    out['control_status'] = control.get('http_status')
-    if control.get('error'):
-        out['failure_stage'] = control.get('error_stage', 'control_request')
-        if control.get('timeout_category'):
-            out['timeout_category'] = control['timeout_category']
-        out['reason'] = 'Control request failed before a response; no active verdict possible.'
-        return out
-    status = control.get('http_status', 0)
-    if status not in range(200, 300):
-        if 300 <= status < 400:
-            out['redirect_location'] = control.get('location')
-            out['endpoint_suitability'] = (
-                'Control POST was redirected (HTTP %s). This endpoint is unsuitable for active '
-                'multipart probing; supply a non-redirecting in-scope endpoint (for example the '
-                'application root or an upload handler) as --url or --path.' % status)
-            out['reason'] = ('Control redirected; no active verdict possible '
-                             '(endpoint is likely a login or redirect route).')
-        else:
-            out['reason'] = 'Control was rejected (HTTP %s); no active verdict possible.' % status
+    if control.get('error') or control.get('http_status', 0) not in range(200, 300):
+        out['reason'] = 'Control transport failed; assessment inconclusive.' if control.get('error') else ('Control redirected; application behavior requires an explicit suitable endpoint.' if 300 <= control.get('http_status', 0) < 400 else 'Control rejected or unhealthy; endpoint unsuitable for this method.')
         return out
     versions = set()
     if control.get('version'):
@@ -151,10 +123,10 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--url', required=True)
     p.add_argument('--timeout', type=int, default=5)
-    p.add_argument('--insecure-tls', action='store_true',
-                   help='Opt in to skip TLS certificate verification (authorized labs only)')
+    p.add_argument('--insecure-tls', action='store_true')
+    p.add_argument('--ca-cert')
     a = p.parse_args()
-    print(json.dumps(check(a.url, a.timeout, a.insecure_tls)))
+    print(json.dumps(check(a.url, a.timeout, a.insecure_tls, a.ca_cert)))
 
 
 if __name__ == '__main__':

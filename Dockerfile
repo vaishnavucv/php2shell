@@ -12,7 +12,7 @@ RUN python -m pip install --no-cache-dir -r requirements-tested.txt \
     && mkdir /reports \
     && chown scanner:scanner /reports
 
-COPY scanner.py php_version.py template_method.py /app/
+COPY scanner.py php_version.py template_method.py http_diagnostics.py assetnote_adapter.py /app/
 COPY vendor/ /app/vendor/
 COPY THIRD_PARTY_NOTICES.md METHOD_REFERENCE.md /app/
 
@@ -24,7 +24,7 @@ RUN python -m unittest -v
 
 FROM base AS runtime
 LABEL org.opencontainers.image.title="SIGiL PHP2Shell Scanner" \
-      org.opencontainers.image.version="1.0.0-rc5" \
+      org.opencontainers.image.version="1.0.0-rc6" \
       org.opencontainers.image.description="PHP2Shell assessment chain with attributed ProjectDiscovery and Assetnote methods"
 
 ENTRYPOINT ["python", "/app/scanner.py"]

@@ -1,0 +1,182 @@
+{
+  "schema_version": "3.2",
+  "scanner_version": "1.0.0-rc6",
+  "scanner": "SIGiL PHP2Shell Chain",
+  "ruleset_date": "2026-10-25",
+  "target": "https://127.0.0.1:52946/login",
+  "profile": "production",
+  "disruptive_testing_opt_in": false,
+  "tls_verification": "enabled",
+  "ca_cert_supplied": false,
+  "active_methods_executed": [],
+  "coverage": [
+    {
+      "target": "https://127.0.0.1:52946/login",
+      "http_status": null,
+      "access_observation": "request_failed",
+      "redirect_location": null,
+      "redirect_classification": null,
+      "endpoint_suitability": "inconclusive",
+      "php_signal_observed": false,
+      "signed_runtime_evidence_supplied": false,
+      "interpretation": "HTTP reachability and banners do not prove access to every PHP backend."
+    }
+  ],
+  "active_validation_status": "not_performed",
+  "remediation_recommendations": [
+    "Verify the web runtime, package revision and vendor backports using trusted inventory.",
+    "Apply the vendor fixes to affected runtimes and restart/redeploy all relevant workers.",
+    "Select an explicitly authorized endpoint accepting multipart POST for active assessment.",
+    "Review TLS trust/hostname and transport failures before any operator-approved reassessment."
+  ],
+  "assessment_type": "PHP2Shell-specific assessment, not a complete PHP application VAPT",
+  "authorization_ref": "VAPT-sample",
+  "findings": [
+    {
+      "cve": "CVE-2026-109618",
+      "status": "inconclusive",
+      "confidence_basis": "insufficient",
+      "reason": "No authenticated runtime/package decision is available.",
+      "rce_confirmed": false,
+      "anomaly_requires_separate_triage": false,
+      "active_validation_status": "not_performed",
+      "version_exposure_status": "unknown",
+      "evidence_confidence": "insufficient",
+      "evidence_provenance": {
+        "passive_targets": [
+          "https://127.0.0.1:52946/login"
+        ],
+        "active_methods": [],
+        "authenticated_runtime_inventory": false
+      }
+    },
+    {
+      "cve": "CVE-2026-109619",
+      "status": "inconclusive",
+      "confidence_basis": "insufficient",
+      "reason": "No authenticated runtime/package decision is available.",
+      "rce_confirmed": false,
+      "anomaly_requires_separate_triage": false,
+      "active_validation_status": "not_performed",
+      "version_exposure_status": "unknown",
+      "evidence_confidence": "insufficient",
+      "evidence_provenance": {
+        "passive_targets": [
+          "https://127.0.0.1:52946/login"
+        ],
+        "active_methods": [],
+        "authenticated_runtime_inventory": false
+      }
+    }
+  ],
+  "passive_evidence": [
+    {
+      "schema_version": "1.0",
+      "node_id": "sigil.php2shell.version-assessment",
+      "ruleset_date": "2026-10-25",
+      "cves": [
+        "CVE-2026-109618",
+        "CVE-2026-109619"
+      ],
+      "checked_at": "2026-10-25T05:57:23.640922+00:00",
+      "target": "https://127.0.0.1:52946/login",
+      "authorization_ref": "VAPT-sample",
+      "assessment_method": "http_response_headers",
+      "rce_confirmed": false,
+      "request_method": "GET",
+      "request_count": 1,
+      "redirects_followed": false,
+      "warnings": [
+        "Version assessment only; exploitability and patch provenance are not verified.",
+        "Headers can be hidden, stale, forged, or rewritten by a proxy.",
+        "Vendor backports require package revision and vendor advisory verification.",
+        "Assess every web runtime and worker; CLI PHP may differ from the web runtime.",
+        "The fixed-version result covers these two CVEs only. PHP published a separate session upload progress notice on 2026-10-23, referencing CVE-2026-115560."
+      ],
+      "references": [
+        "https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w",
+        "https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp",
+        "https://www.php.net/index.php"
+      ],
+      "http_status": null,
+      "redirect_location": null,
+      "failure_stage": "tls",
+      "timeout_category": null,
+      "elapsed_seconds": 0.0086,
+      "tls_verification": "enabled",
+      "error": "SSLCertVerificationError",
+      "error_detail": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1010)",
+      "tls_error_category": "certificate_verification_failed",
+      "endpoint_suitability": "inconclusive",
+      "status": "error",
+      "reason": "SSLCertVerificationError",
+      "evidence": [],
+      "version": null,
+      "fixed_version": null,
+      "evidence_confidence": "insufficient",
+      "evidence_provenance": "http_response_headers"
+    }
+  ],
+  "active_evidence": [],
+  "recovery_checks": [],
+  "active_stopped_after_recovery_failure": false,
+  "timing": {
+    "total_elapsed_seconds": 0.0098,
+    "stages": [
+      {
+        "stage": "remote_version_assessment",
+        "target": "https://127.0.0.1:52946/login",
+        "elapsed_seconds": 0.0097
+      }
+    ]
+  },
+  "method_catalog": [
+    {
+      "id": "remote_version",
+      "enabled": true,
+      "family": "advertised_runtime_version"
+    },
+    {
+      "id": "projectdiscovery_python",
+      "enabled": false,
+      "family": "multipart_oom_behavior"
+    },
+    {
+      "id": "assetnote",
+      "enabled": false,
+      "family": "multipart_oom_behavior"
+    },
+    {
+      "id": "trusted_runtime_evidence",
+      "enabled": false,
+      "family": "authenticated_runtime_inventory"
+    }
+  ],
+  "methods_enabled": 1,
+  "active_method_correlation": "Template and Assetnote share multipart/OOM evidence. They are not independent CVE confirmations.",
+  "attestation_verified": false,
+  "scope": "Only the explicitly assessed endpoints and declared backend coverage.",
+  "accuracy": {
+    "measured": false,
+    "percentage": null
+  },
+  "next_actions": [
+    "Confirm web-runtime/package identity and vendor backports.",
+    "Upgrade affected PHP and restart/redeploy every relevant worker.",
+    "Rescan the same routes and verify active-worker evidence."
+  ],
+  "warnings": [
+    "Version assessment only; exploitability and patch provenance are not verified.",
+    "Headers can be hidden, stale, forged, or rewritten by a proxy.",
+    "Vendor backports require package revision and vendor advisory verification.",
+    "Assess every web runtime and worker; CLI PHP may differ from the web runtime.",
+    "The fixed-version result covers these two CVEs only. PHP published a separate session upload progress notice on 2026-10-23, referencing CVE-2026-115560.",
+    "A passing URL can be assessed, but CDN/WAF masking, authentication and hidden versions can leave runtime status inconclusive."
+  ],
+  "upstream": {
+    "assetnote_commit": "052b56ef4f9bf674aa31ac645068144747bade3d",
+    "assetnote_blob": "287e97898ab759f6692c698f83d9a30d81db4fbb",
+    "projectdiscovery_template_blob": "9d89d77dbd5f269dd0039534f204c16389911f46",
+    "projectdiscovery_url": "https://github.com/projectdiscovery/nuclei-templates/blob/main/http/cves/2026/CVE-2026-109618.yaml"
+  }
+}

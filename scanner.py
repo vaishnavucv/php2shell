@@ -77,7 +77,9 @@ def active_signals(document):
         probes = item.get('probes') or []
         statuses = [p.get('status_code') for p in probes if isinstance(p, dict)]
         r = reason.lower()
-        if item.get('error') or item.get('verdict') in ('ERROR', 'INCONCLUSIVE'):
+        if (item.get('error') or item.get('verdict') in ('ERROR', 'INCONCLUSIVE')
+                or any(isinstance(x, int) and 300 <= x < 400 for x in
+                       [*statuses, (item.get('control') or {}).get('status_code')])):
             kind = 'inconclusive'
         elif 'no crash observed' in r:
             kind = 'version_only' if item.get('powered_by') else 'no_signal'
@@ -94,7 +96,7 @@ def active_signals(document):
     return result
 
 
-def run_active(script, url, timeout, insecure_tls=False):
+def run_active(script, url, timeout, insecure_tls=False, ca_cert=None):
     """Execute the reviewed upstream scanner without shell interpolation."""
     script = Path(script).resolve(strict=True)
     data = script.read_bytes()
@@ -103,51 +105,38 @@ def run_active(script, url, timeout, insecure_tls=False):
         raise ValueError('Assetnote scanner differs from the reviewed revision. Review before updating pin.')
     with tempfile.TemporaryDirectory(prefix='sigil-p2s-') as temp:
         out = Path(temp) / 'result.json'
-        argv = [sys.executable, str(script), '-u', url, '-t', '1', '--timeout',
-                str(timeout), '--all-results', '--no-color', '-o', str(out)]
+        argv = [sys.executable, '-s', str(Path(__file__).with_name('assetnote_adapter.py')),
+                '--script', str(script), '--url', url, '--timeout', str(timeout)]
         if insecure_tls:
-            # The pinned upstream scanner already exposes --insecure (verify_ssl
-            # -> CERT_NONE); pass it through rather than editing the vendored file.
-            argv.append('--insecure')
+            argv.append('--insecure-tls')
+        if ca_cert:
+            argv += ['--ca-cert', str(ca_cert)]
         # Credentials and proxy environment variables are not forwarded.
         env = {k: v for k, v in os.environ.items() if k in
                ('PATH', 'SYSTEMROOT', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'LANG', 'VIRTUAL_ENV')}
         env['PYTHONNOUSERSITE'] = '1'
         try:
-            with open(os.devnull, 'wb') as sink:
-                proc = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=sink,
+            with out.open('w') as output, open(os.devnull, 'wb') as sink:
+                proc = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=output,
                                       stderr=sink, env=env, timeout=timeout * 6 + 10,
                                       check=False, shell=False)
-            # Upstream main() returns 1 for positive findings, 0 otherwise,
-            # and 2 for output-write failure. Never discard a positive report.
-            if proc.returncode not in (0, 1) or not out.exists():
-                return [{'kind': 'inconclusive', 'execution_status': 'failed',
-                         'upstream_exit_code': proc.returncode, 'report_found': out.exists(),
-                         'reason': 'Upstream report unavailable or execution failed. Exit code 1 is a finding only when a valid report exists.'}]
+            if proc.returncode != 0 or not out.exists():
+                return [{'kind': 'inconclusive', 'reason': 'Upstream execution failed; check dependencies.'}]
             if out.stat().st_size > 2 * 1024 * 1024:
                 raise ValueError('Upstream report exceeds size limit.')
-            try:
-                signals = active_signals(json.loads(out.read_text()))
-            except (json.JSONDecodeError, ValueError):
-                return [{'kind': 'inconclusive', 'execution_status': 'failed',
-                         'upstream_exit_code': proc.returncode,
-                         'reason': 'Upstream output is not a valid scanner report.'}]
-            if not signals:
-                return [{'kind': 'inconclusive', 'execution_status': 'failed',
-                         'upstream_exit_code': proc.returncode,
-                         'reason': 'Upstream report contains no target results.'}]
-            return [dict(x, upstream_exit_code=proc.returncode, execution_status='completed') for x in signals]
+            return [json.loads(out.read_text())]
         except subprocess.TimeoutExpired:
-            return [{'kind': 'inconclusive', 'execution_status': 'failed',
-                     'reason': 'Upstream execution exceeded deadline.'}]
+            return [{'kind': 'inconclusive', 'reason': 'Upstream execution exceeded deadline.', 'failure_stage': 'subprocess', 'timeout_category': 'stage_deadline'}]
 
 
-def run_template(url, timeout, insecure_tls=False):
+def run_template(url, timeout, insecure_tls=False, ca_cert=None):
     """Run the Python method without Nuclei, with an outer stage deadline."""
     argv = [sys.executable, '-s', str(Path(__file__).with_name('template_method.py')),
             '--url', url, '--timeout', str(timeout)]
     if insecure_tls:
         argv.append('--insecure-tls')
+    if ca_cert:
+        argv += ['--ca-cert', str(ca_cert)]
     try:
         proc = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True,
                               text=True, timeout=timeout * 6 + 10, check=False, shell=False)
@@ -158,7 +147,7 @@ def run_template(url, timeout, insecure_tls=False):
             raise ValueError('Malformed template method result.')
         return [value]
     except (subprocess.TimeoutExpired, json.JSONDecodeError):
-        return [{'kind': 'inconclusive', 'reason': 'Template adaptation timed out or returned invalid JSON.'}]
+        return [{'kind': 'inconclusive', 'reason': 'Template adaptation timed out or returned invalid JSON.', 'failure_stage': 'subprocess'}]
 
 
 def decide(passive, active, attestation=None):
@@ -201,7 +190,7 @@ def decide(passive, active, attestation=None):
 
 def run_chain(url, origins, authorization_ref, paths=(), timeout=5, active_script=None,
               attestation=None, budget=1, active_methods=(), profile='production',
-              allow_disruptive=False, insecure_tls=False):
+              allow_disruptive=False, active_endpoints=(), insecure_tls=False, ca_cert=None):
     started = time.monotonic()
     timings = []
 
@@ -225,6 +214,11 @@ def run_chain(url, origins, authorization_ref, paths=(), timeout=5, active_scrip
         parse_url(candidate)
         if candidate not in urls:
             urls.append(candidate)
+    for endpoint in active_endpoints:
+        if parse_url(endpoint)[1] != origin:
+            raise ValueError('Active endpoint must share the authorized target origin.')
+        if endpoint not in urls:
+            urls.append(endpoint)
     if len(urls) > 6:
         raise ValueError('At most six explicit endpoints are supported.')
     if not 1 <= budget <= 3:
@@ -239,26 +233,32 @@ def run_chain(url, origins, authorization_ref, paths=(), timeout=5, active_scrip
     if 'assetnote' in methods and not active_script:
         active_script = str(Path(__file__).parent / 'vendor' / 'assetnote_scanner.py')
     passive = [timed('remote_version_assessment', u,
-                    lambda u=u: scan(u, origins, authorization_ref, timeout, insecure_tls)) for u in urls]
+                    lambda u=u: scan(u, origins, authorization_ref, timeout, insecure_tls, ca_cert)) for u in urls]
     active = []
     recovery = []
     active_aborted = False
     if methods:
-        for p in passive[:budget]:
+        for p in [x for x in passive if not active_endpoints or x['target'] in active_endpoints][:budget]:
             if p.get('http_status', 0) not in range(200, 300):
                 active.append({'kind': 'inconclusive', 'target': p['target'],
-                               'reason': 'Active testing skipped because baseline is not HTTP 2xx.'})
+                               'reason': 'Endpoint unsuitable: baseline is not HTTP 2xx.',
+                               'endpoint_suitability': p.get('endpoint_suitability', 'unsuitable'),
+                               'redirect_location': p.get('redirect_location')})
                 continue
             for method in methods:
                 results = timed(method + '_active_assessment', p['target'],
-                    lambda: run_template(p['target'], timeout, insecure_tls) if method == 'template'
-                    else run_active(active_script, p['target'], timeout, insecure_tls))
+                    lambda: run_template(p['target'], timeout, insecure_tls, ca_cert) if method == 'template'
+                    else run_active(active_script, p['target'], timeout, insecure_tls, ca_cert))
                 active.extend(dict(x, target=p['target'], method=method,
                                    evidence_family='multipart_oom_behavior') for x in results)
                 health = timed('post_' + method + '_recovery', p['target'],
-                               lambda: scan(p['target'], origins, authorization_ref, timeout, insecure_tls))
+                               lambda: scan(p['target'], origins, authorization_ref, timeout, insecure_tls, ca_cert))
                 recovery.append({'after_method': method, 'target': p['target'],
-                                 'http_status': health.get('http_status'), 'status': health['status']})
+                                 'http_status': health.get('http_status'), 'status': health['status'],
+                                 'recovered': health.get('http_status', 0) in range(200, 300),
+                                 'elapsed_seconds': health.get('elapsed_seconds'),
+                                 'failure_stage': health.get('failure_stage'),
+                                 'timeout_category': health.get('timeout_category')})
                 if health.get('http_status', 0) not in range(200, 300):
                     active.append({'kind': 'inconclusive', 'target': p['target'], 'method': method,
                                    'reason': 'Recovery request failed; further active testing stopped.'})
@@ -266,28 +266,38 @@ def run_chain(url, origins, authorization_ref, paths=(), timeout=5, active_scrip
                     break
             if active_aborted:
                 break
+    for item in active:
+        item.setdefault('active_validation_status', 'inconclusive' if item['kind'] == 'inconclusive'
+                        else 'anomaly_observed' if item['kind'] in ('ambiguous_runtime_anomaly', 'unverified_upstream_positive')
+                        else 'no_confirming_evidence')
+        item.setdefault('evidence_confidence', 'insufficient' if item['kind'] == 'inconclusive' else 'low')
+        # Execution status is independent of the verdict: whether the method
+        # actually ran, was skipped as unsuitable, or stopped after recovery.
+        if 'method' not in item:
+            item.setdefault('execution_status', 'skipped_unsuitable_endpoint')
+        elif str(item.get('reason', '')).startswith('Recovery'):
+            item.setdefault('execution_status', 'stopped_after_recovery_failure')
+        else:
+            item.setdefault('execution_status', 'executed')
+        for field in ('control_request_status', 'redirect_location', 'failure_stage', 'timeout_category'):
+            item.setdefault(field, None)
     findings = decide(passive, active, attestation)
-    # Separate version-based exposure from active validation so a reader never
-    # mistakes "advertises an old version" for "actively verified vulnerable".
-    SEVERITY = ['affected_runtime_verified', 'evidence_conflict', 'suspicious_behavior',
-                'potentially_affected', 'fix_level_advertised', 'patch_verified', 'inconclusive']
-    version_statuses = [p.get('status') for p in passive]
-    active_ran = [a for a in active if a.get('method')]
-    active_anomaly = any(a.get('kind') in ('ambiguous_runtime_anomaly', 'unverified_upstream_positive')
-                         for a in active)
-    overall = next((s for s in SEVERITY if s in [f['status'] for f in findings]), 'inconclusive')
-    verdict_summary = {
-        'version_assessment': ('potentially_affected' if 'potentially_affected' in version_statuses
-                               else 'fix_level_advertised' if 'upstream_fix_level_observed' in version_statuses
-                               else 'error' if version_statuses and all(s == 'error' for s in version_statuses)
-                               else 'inconclusive'),
-        'active_assessment': ('anomaly_observed' if active_anomaly
-                              else 'inconclusive' if active_ran
-                              else 'not_run'),
-        'active_executed': bool(active_ran),
-        'overall_status': overall,
-        'rce_confirmed': False,
-    }
+    validation = ('not_performed' if not active else 'inconclusive' if any(
+        x['active_validation_status'] == 'inconclusive' for x in active) else
+        'anomaly_observed' if any(x['active_validation_status'] == 'anomaly_observed' for x in active)
+        else 'no_confirming_evidence')
+    recommendations = ['Verify the web runtime, package revision and vendor backports using trusted inventory.',
+        'Apply the vendor fixes to affected runtimes and restart/redeploy all relevant workers.',
+        'Select an explicitly authorized endpoint accepting multipart POST for active assessment.',
+        'Review TLS trust/hostname and transport failures before any operator-approved reassessment.']
+    for finding in findings:
+        finding.update(active_validation_status=validation,
+                       version_exposure_status=('potentially_affected' if any(x.get('status') == 'potentially_affected' for x in passive)
+                           else 'upstream_fix_level_observed' if any(x.get('status') == 'upstream_fix_level_observed' for x in passive) else 'unknown'),
+                       evidence_confidence='high' if finding['confidence_basis'] == 'high' else 'low' if finding['confidence_basis'] != 'insufficient' else 'insufficient',
+                       evidence_provenance={'passive_targets': [x['target'] for x in passive],
+                                            'active_methods': [x['method'] for x in active if x.get('method')],
+                                            'authenticated_runtime_inventory': attestation is not None})
     catalog = [
         {'id': 'remote_version', 'enabled': True, 'family': 'advertised_runtime_version'},
         {'id': 'projectdiscovery_python', 'enabled': 'template' in methods, 'family': 'multipart_oom_behavior'},
@@ -312,15 +322,21 @@ def run_chain(url, origins, authorization_ref, paths=(), timeout=5, active_scrip
             access = 'http_response_observed'
         coverage.append({'target': item['target'], 'http_status': status,
                          'access_observation': access,
+                         'redirect_location': item.get('redirect_location'),
+                         'redirect_classification': item.get('redirect_classification'),
+                         'endpoint_suitability': item.get('endpoint_suitability'),
                          'php_signal_observed': item.get('php_signal_observed', False),
                          'signed_runtime_evidence_supplied': attestation is not None,
                          'interpretation': 'HTTP reachability and banners do not prove access to every PHP backend.'})
-    return {'schema_version': '3.1', 'scanner_version': '1.0.0-rc5', 'scanner': 'SIGiL PHP2Shell Chain',
+    return {'schema_version': '3.2', 'scanner_version': '1.0.0-rc6', 'scanner': 'SIGiL PHP2Shell Chain',
             'ruleset_date': '2026-10-25', 'target': url,
             'profile': profile, 'disruptive_testing_opt_in': bool(allow_disruptive),
             'tls_verification': 'disabled' if insecure_tls else 'enabled',
-            'verdict_summary': verdict_summary,
-            'coverage': coverage,
+            'ca_cert_supplied': bool(ca_cert),
+            'active_methods_executed': [x['method'] for x in active
+                                        if x.get('method') and x.get('execution_status') == 'executed'],
+            'coverage': coverage, 'active_validation_status': validation,
+            'remediation_recommendations': recommendations,
             'assessment_type': 'PHP2Shell-specific assessment, not a complete PHP application VAPT',
             'authorization_ref': authorization_ref, 'findings': findings,
             'passive_evidence': passive, 'active_evidence': active,
@@ -345,6 +361,8 @@ def main():
     p.add_argument('--allow-origin', action='append', required=True)
     p.add_argument('--authorization-ref', required=True)
     p.add_argument('--path', action='append', default=[])
+    p.add_argument('--active-endpoint', action='append', default=[],
+                   help='Exact authorized URL for active tests; same origin, no query/fragment. Repeat within budget.')
     p.add_argument('--timeout', type=int, default=5, choices=range(1, 31))
     p.add_argument('--profile', choices=('production', 'lab'), default='production',
                    help='production defaults to passive assessment')
@@ -356,11 +374,16 @@ def main():
     p.add_argument('--assetnote-script')
     p.add_argument('--active-endpoint-budget', type=int, default=1, choices=range(1, 4))
     p.add_argument('--attestation', help='HMAC-authenticated backend web-runtime evidence')
+    p.add_argument('--ca-cert', help='Trusted CA bundle (PEM) for a private PKI; verification stays enabled')
     p.add_argument('--insecure-tls', action='store_true',
-                   help='Opt in to skip TLS certificate verification for the whole chain '
-                        '(authorized labs with self-signed or IP-only certificates)')
+                   help='Opt out of TLS certificate verification for an authorized lab with a '
+                        'self-signed or IP-only certificate; never disabled automatically')
     p.add_argument('--output')
     a = p.parse_args()
+    if a.ca_cert and a.insecure_tls:
+        p.error('--ca-cert and --insecure-tls are mutually exclusive.')
+    if a.ca_cert and not Path(a.ca_cert).is_file():
+        p.error('--ca-cert must point to a readable PEM bundle.')
     if a.assetnote_script and not a.active:
         p.error('--assetnote-script requires --active.')
     if a.active_method != 'template' and not a.active:
@@ -370,6 +393,8 @@ def main():
         p.error('--assetnote-script requires --active-method assetnote or both.')
     methods = (() if not a.active else ('template', 'assetnote') if a.active_method == 'both'
                else (a.active_method,))
+    if a.active_endpoint and not a.active:
+        p.error('--active-endpoint requires --active.')
     if a.allow_disruptive and not a.active:
         p.error('--allow-disruptive requires --active.')
     try:
@@ -377,7 +402,7 @@ def main():
         report = run_chain(a.url, a.allow_origin, a.authorization_ref, a.path, a.timeout,
                            active_script if 'assetnote' in methods else None, evidence,
                            a.active_endpoint_budget, methods, a.profile, a.allow_disruptive,
-                           a.insecure_tls)
+                           a.active_endpoint, a.insecure_tls, a.ca_cert)
         encoded = json.dumps(report, indent=2)
         if a.output:
             Path(a.output).write_text(encoded + '\n')

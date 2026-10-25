@@ -78,3 +78,16 @@ The report records elapsed seconds for baseline stages, active stages, recovery 
 ## Interpretation
 
 Matching two related active engines must not increase a result to confirmed RCE. Empty 500s, OOM messages and gateway failures are possible on patched or unrelated systems. No signal, rejected probes, hidden versions or transport failures do not establish a patch. High-confidence runtime conclusions require a correctly implemented trusted collector, vendor advisory mapping and active-worker coverage. Every result continues to set rce_confirmed to false.
+
+## rc5 transport adaptation
+
+`assetnote_adapter.py` imports the hash-pinned, unchanged upstream module in its
+isolated subprocess and replaces its HTTP sending function with the same staged
+single-attempt transport used by the template method. It invokes `check_url` for
+the exact operator-supplied URL, gates controls on HTTP 2xx, limits response capture
+to 256 KiB plus one sentinel byte, caps sends at four and blocks route changes.
+The upstream payload builder and behavioral classifier remain attributed to the
+pinned source. Redirects, non-2xx responses and transport/capture failures stop the
+adapter with inconclusive validation. This conservative transport can observe write
+timeouts when a server stops reading an upload; that outcome does not establish a
+crash. Automatic phpMyAdmin discovery and redirect traversal are disabled.
