@@ -58,8 +58,9 @@ jobs:
           target: test
           platforms: linux/amd64,linux/arm64
           outputs: type=cacheonly
-          cache-from: type=gha,scope=scanner-tests
-          cache-to: type=gha,mode=max,scope=scanner-tests
+          # No build cache: a cached COPY layer previously baked stale scanner
+          # code under a new version label. Correctness beats a faster build.
+          no-cache: true
 
       - name: Log in to GHCR
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
@@ -90,10 +91,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: |
-            type=gha,scope=scanner-tests
-            type=gha,scope=scanner-runtime
-          cache-to: type=gha,mode=max,scope=scanner-runtime
+          # No build cache (see the test step) — guarantees the published image
+          # is built from the committed source, not a stale cached layer.
+          no-cache: true
 
       - name: Verify published platforms
         env:
