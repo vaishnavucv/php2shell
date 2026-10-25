@@ -1,0 +1,4 @@
+# Optional Assetnote dependencies used by the integration validation.
+# Native template mode needs neither of these packages.
+h11==0.16.0
+tqdm==4.70.1

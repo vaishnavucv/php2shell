@@ -1,0 +1,15 @@
+services:
+  scanner:
+    build:
+      context: .
+      target: runtime
+    image: sigil-php2shell:1.0-rc2
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=67108864,mode=1777
+    volumes:
+      - ./reports:/reports

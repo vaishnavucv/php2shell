@@ -1,0 +1,57 @@
+{
+  "kind": "proposed-sigil-integration-contract",
+  "id": "sigil.php2shell.chain",
+  "label": "PHP2Shell Assessment Chain",
+  "version": "1.0.0-rc2",
+  "entrypoint": "scanner.py",
+  "modes": [
+    "remote-assessment",
+    "active-lab-assessment",
+    "trusted-runtime-evidence"
+  ],
+  "default_mode": "remote-assessment",
+  "authorization": "existing SIGiL backend must enforce tenant/asset/agent scope",
+  "input": [
+    "url",
+    "allowed_origins",
+    "authorization_ref",
+    "explicit_paths",
+    "active_mode",
+    "signed_attestation"
+  ],
+  "outputs": [
+    "per_cve_findings",
+    "passive_evidence",
+    "active_evidence",
+    "next_actions"
+  ],
+  "confirmed_rce_detection": false,
+  "runtime_collector_included": false,
+  "measured_accuracy_available": false,
+  "automatic_patching": false,
+  "max_passive_endpoints": 6,
+  "default_active_endpoint_budget": 1,
+  "upstream_credit": "Assetnote Security Research Team, MIT",
+  "schema_version": "3.1",
+  "assessment_methods_available": 4,
+  "default_active_method": "projectdiscovery_python_adaptation",
+  "nuclei_binary_required": false,
+  "template_source_blob": "9d89d77dbd5f269dd0039534f204c16389911f46",
+  "active_method_correlation": "Both active engines share multipart/OOM evidence; no independent voting",
+  "recovery_check_after_each_active_method": true,
+  "docker": {
+    "dockerfile": "Dockerfile",
+    "image_example": "sigil-php2shell:1.0-rc2",
+    "entrypoint": [
+      "python",
+      "/app/scanner.py"
+    ],
+    "scanner_flags_passthrough": true,
+    "report_mount": "/reports",
+    "container_build_validated": false
+  },
+  "default_profile": "production",
+  "production_active_requires_disruptive_opt_in": true,
+  "production_url_supported": true,
+  "full_application_vapt": false
+}
